@@ -26,13 +26,14 @@ run_tests;
 
 __DATA__
 
-=== TEST 1: set upstream(id: 1)
+=== TEST 1: set upstream (use an id can't be referred by other route
+so that we can delete it later)
 --- config
     location /t {
         content_by_lua_block {
             local t = require("lib.test_admin").test
             local etcd = require("apisix.core.etcd")
-            local code, body = t('/apisix/admin/upstreams/1',
+            local code, body = t('/apisix/admin/upstreams/admin_up',
                 ngx.HTTP_PUT,
                 [[{
                     "nodes": {
@@ -50,7 +51,7 @@ __DATA__
                             "type": "roundrobin",
                             "desc": "new upstream"
                         },
-                        "key": "/apisix/upstreams/1"
+                        "key": "/apisix/upstreams/admin_up"
                     },
                     "action": "set"
                 }]]
@@ -59,7 +60,7 @@ __DATA__
             ngx.status = code
             ngx.say(body)
 
-            local res = assert(etcd.get('/upstreams/1'))
+            local res = assert(etcd.get('/upstreams/admin_up'))
             local create_time = res.body.node.value.create_time
             assert(create_time ~= nil, "create_time is nil")
             local update_time = res.body.node.value.update_time
@@ -75,12 +76,12 @@ passed
 
 
 
-=== TEST 2: get upstream(id: 1)
+=== TEST 2: get upstream
 --- config
     location /t {
         content_by_lua_block {
             local t = require("lib.test_admin").test
-            local code, body = t('/apisix/admin/upstreams/1',
+            local code, body = t('/apisix/admin/upstreams/admin_up',
                  ngx.HTTP_GET,
                  nil,
                 [[{
@@ -92,7 +93,7 @@ passed
                             "type": "roundrobin",
                             "desc": "new upstream"
                         },
-                        "key": "/apisix/upstreams/1"
+                        "key": "/apisix/upstreams/admin_up"
                     },
                     "action": "get"
                 }]]
@@ -111,12 +112,12 @@ passed
 
 
 
-=== TEST 3: delete upstream(id: 1)
+=== TEST 3: delete upstream
 --- config
     location /t {
         content_by_lua_block {
             local t = require("lib.test_admin").test
-            local code, message = t('/apisix/admin/upstreams/1',
+            local code, message = t('/apisix/admin/upstreams/admin_up',
                  ngx.HTTP_DELETE,
                  nil,
                  [[{
@@ -379,7 +380,7 @@ GET /t
 
 
 
-=== TEST 11: no additional properties is valid
+=== TEST 11: additional properties is valid
 --- config
     location /t {
         content_by_lua_block {
@@ -392,19 +393,19 @@ GET /t
                         "127.0.0.1:8080": 1
                     },
                     "type": "roundrobin",
-                    "invalid_property": "/index.html"
+                    "_service_name": "xyz",
+                    "_discovery_type": "nacos"
                 }]]
                 )
 
             ngx.status = code
-            ngx.print(body)
+            ngx.say(body)
         }
     }
 --- request
 GET /t
---- error_code: 400
 --- response_body
-{"error_msg":"invalid configuration: additional properties forbidden, found invalid_property"}
+passed
 --- no_error_log
 [error]
 
@@ -1601,6 +1602,7 @@ GET /t
     }
 --- request
 GET /t
+--- skip_nginx: 5: > 1.19.0
 --- error_code: 400
 --- no_error_log
 [error]
@@ -1911,12 +1913,12 @@ passed
 
 
 
-=== TEST 55: create upstream with create_time and update_time(id: 1)
+=== TEST 55: create upstream with create_time and update_time
 --- config
     location /t {
         content_by_lua_block {
             local t = require("lib.test_admin").test
-            local code, body = t('/apisix/admin/upstreams/1',
+            local code, body = t('/apisix/admin/upstreams/up_create_update_time',
                 ngx.HTTP_PUT,
                 [[{
                     "nodes": {
@@ -1936,7 +1938,7 @@ passed
                             "create_time": 1602883670,
                             "update_time": 1602893670
                         },
-                        "key": "/apisix/upstreams/1"
+                        "key": "/apisix/upstreams/up_create_update_time"
                     },
                     "action": "set"
                 }]]
@@ -1955,12 +1957,12 @@ passed
 
 
 
-=== TEST 56: delete test upstream(id: 1)
+=== TEST 56: delete test upstream
 --- config
     location /t {
         content_by_lua_block {
             local t = require("lib.test_admin").test
-            local code, message = t('/apisix/admin/upstreams/1',
+            local code, message = t('/apisix/admin/upstreams/up_create_update_time',
                  ngx.HTTP_DELETE,
                  nil,
                  [[{

@@ -16,8 +16,8 @@
 --
 local core = require("apisix.core")
 local get_routes = require("apisix.router").http_routes
+local apisix_upstream = require("apisix.upstream")
 local schema_plugin = require("apisix.admin.plugins").check_schema
-local upstreams = require("apisix.admin.upstreams")
 local utils = require("apisix.admin.utils")
 local tostring = tostring
 local ipairs = ipairs
@@ -63,7 +63,7 @@ local function check_conf(id, conf, need_id)
 
     local upstream_conf = conf.upstream
     if upstream_conf then
-        local ok, err = upstreams.check_upstream_conf(upstream_conf)
+        local ok, err = apisix_upstream.check_upstream_conf(upstream_conf)
         if not ok then
             return nil, {error_msg = err}
         end
@@ -145,6 +145,7 @@ function _M.get(id)
         return 500, {error_msg = err}
     end
 
+    utils.fix_count(res.body, id)
     return res.status, res.body
 end
 

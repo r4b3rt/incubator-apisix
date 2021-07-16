@@ -17,6 +17,7 @@
 use t::APISIX 'no_plan';
 
 log_level('debug');
+worker_connections(1024);
 repeat_each(1);
 no_long_string();
 no_root_location();
@@ -161,36 +162,48 @@ request header present
     location /t {
         content_by_lua_block {
             local http = require "resty.http"
-            local httpc = http.new()
-            local uri = "http://127.0.0.1:" .. ngx.var.server_port .. "/opentracing"
-            local res1, err1 = httpc:request_uri(uri,
-                {
-                    method = "GET",
-                    headers = {
-                        ["Content-Type"] = "application/json",
-                    }
-                }
-            )
-            local res2, err2 = httpc:request_uri(uri,
-                {
-                    method = "GET",
-                    headers = {
-                        ["Content-Type"] = "application/json",
-                    }
-                }
-            )
+            local t = {}
+            local ids = {}
+            for i = 1, 180 do
+                local th = assert(ngx.thread.spawn(function()
+                    local httpc = http.new()
+                    local uri = "http://127.0.0.1:" .. ngx.var.server_port .. "/opentracing"
+                    local res, err = httpc:request_uri(uri,
+                        {
+                            method = "GET",
+                            headers = {
+                                ["Content-Type"] = "application/json",
+                            }
+                        }
+                    )
+                    if not res then
+                        ngx.log(ngx.ERR, err)
+                        return
+                    end
 
-            -- ngx.say("res1: ", res1.headers["X-Request-Id"])
-            -- ngx.say("res2: ", res2.headers["X-Request-Id"])
-            if res1.headers["X-Request-Id"] == res2.headers["X-Request-Id"] then
-                ngx.say("ids not unique")
-            else
-                ngx.say("true")
+                    local id = res.headers["X-Request-Id"]
+                    if not id then
+                        return -- ignore if the data is not synced yet.
+                    end
+
+                    if ids[id] == true then
+                        ngx.say("ids not unique")
+                        return
+                    end
+                    ids[id] = true
+                end, i))
+                table.insert(t, th)
             end
+            for i, th in ipairs(t) do
+                ngx.thread.wait(th)
+            end
+
+            ngx.say("true")
         }
     }
 --- request
 GET /t
+--- wait: 5
 --- response_body
 true
 --- no_error_log
@@ -372,5 +385,88 @@ passed
 GET /t
 --- response_body
 request header not present
+--- no_error_log
+[error]
+
+
+
+=== TEST 10: add plugin with custom header name in global rule and add plugin with default header name in specific route
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/global_rules/1',
+                ngx.HTTP_PUT,
+                     [[{
+                        "plugins": {
+                            "request-id": {
+                                "header_name":"Custom-Header-Name"
+                            }
+                        }
+                }]]
+                )
+            if code >= 300 then
+                ngx.status = code
+                ngx.say(body)
+                return
+            end
+            local code, body = t('/apisix/admin/routes/1',
+                ngx.HTTP_PUT,
+                    [[{
+                        "plugins": {
+                            "request-id": {
+                            }
+                        },
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1982": 1
+                            },
+                            "type": "roundrobin"
+                        },
+                        "uri": "/opentracing"
+                }]]
+                )
+            if code >= 300 then
+                ngx.status = code
+                return
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+--- no_error_log
+[error]
+
+
+
+=== TEST 11: check for multiple request-ids in the response header are different
+--- config
+    location /t {
+        content_by_lua_block {
+            local http = require "resty.http"
+            local httpc = http.new()
+            local uri = "http://127.0.0.1:" .. ngx.var.server_port .. "/opentracing"
+            local res, err = httpc:request_uri(uri,
+                {
+                    method = "GET",
+                    headers = {
+                        ["Content-Type"] = "application/json",
+                    }
+                })
+
+            if res.headers["X-Request-Id"] ~= res.headers["Custom-Header-Name"] then
+                ngx.say("X-Request-Id and Custom-Header-Name are different")
+            else
+                ngx.say("failed")
+            end
+        }
+    }
+--- request
+GET /t
+--- response_body
+X-Request-Id and Custom-Header-Name are different
 --- no_error_log
 [error]

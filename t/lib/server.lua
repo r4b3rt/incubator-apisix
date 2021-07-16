@@ -31,6 +31,7 @@ end
 
 
 function _M.hello()
+    ngx.req.read_body()
     local s = "hello world"
     ngx.header['Content-Length'] = #s + 1
     ngx.say(s)
@@ -51,8 +52,9 @@ function _M.hello1()
 end
 
 
-function _M.hello_()
-    ngx.say("hello world")
+-- Fake endpoint, needed for testing authz-keycloak plugin.
+function _M.course_foo()
+    ngx.say("course foo")
 end
 
 
@@ -80,19 +82,33 @@ end
 function _M.plugin_proxy_rewrite_args()
     ngx.say("uri: ", ngx.var.uri)
     local args = ngx.req.get_uri_args()
-    for k,v in pairs(args) do
-        ngx.say(k, ": ", v)
+
+    local keys = {}
+    for k, _ in pairs(args) do
+        table.insert(keys, k)
+    end
+    table.sort(keys)
+
+    for _, key in ipairs(keys) do
+        if type(args[key]) == "table" then
+            ngx.say(key, ": ", table.concat(args[key], ','))
+        else
+            ngx.say(key, ": ", args[key])
+        end
+    end
+end
+
+
+function _M.specific_status()
+    local status = ngx.var.http_x_test_upstream_status
+    if status ~= nil then
+        ngx.status = status
+        ngx.say("upstream status: ", status)
     end
 end
 
 
 function _M.status()
-    ngx.say("ok")
-end
-
-
-function _M.sleep1()
-    ngx.sleep(1)
     ngx.say("ok")
 end
 
@@ -108,14 +124,22 @@ function _M.ewma()
 end
 
 
+local builtin_hdr_ignore_list = {
+    ["x-forwarded-for"] = true,
+    ["x-forwarded-proto"] = true,
+    ["x-forwarded-host"] = true,
+    ["x-forwarded-port"] = true,
+}
+
 function _M.uri()
-    -- ngx.sleep(1)
     ngx.say("uri: ", ngx.var.uri)
     local headers = ngx.req.get_headers()
 
     local keys = {}
     for k in pairs(headers) do
-        table.insert(keys, k)
+        if not builtin_hdr_ignore_list[k] then
+            table.insert(keys, k)
+        end
     end
     table.sort(keys)
 
@@ -128,7 +152,6 @@ _M.uri_plugin_proxy_rewrite_args = _M.uri
 
 
 function _M.old_uri()
-    -- ngx.sleep(1)
     ngx.say("uri: ", ngx.var.uri)
     local headers = ngx.req.get_headers()
 
@@ -160,34 +183,56 @@ end
 function _M.mock_zipkin()
     ngx.req.read_body()
     local data = ngx.req.get_body_data()
+    ngx.log(ngx.NOTICE, data)
+
     local spans = json_decode(data)
-    if #spans < 5 then
-        ngx.exit(400)
+    local ver = ngx.req.get_uri_args()['span_version']
+    if ver == "1" then
+        if #spans ~= 5 then
+            ngx.log(ngx.ERR, "wrong number of spans: ", #spans)
+            ngx.exit(400)
+        end
+    else
+        if #spans ~= 3 then
+            -- request/proxy/response
+            ngx.log(ngx.ERR, "wrong number of spans: ", #spans)
+            ngx.exit(400)
+        end
     end
 
     for _, span in pairs(spans) do
-        if string.sub(span.name, 1, 6) ~= 'apisix' then
+        local prefix = string.sub(span.name, 1, 6)
+        if prefix ~= 'apisix' then
+            ngx.log(ngx.ERR, "wrong prefix of name", prefix)
             ngx.exit(400)
         end
         if not span.traceId then
+            ngx.log(ngx.ERR, "missing trace id")
             ngx.exit(400)
         end
 
         if not span.localEndpoint then
+            ngx.log(ngx.ERR, "missing local endpoint")
             ngx.exit(400)
         end
 
         if span.localEndpoint.serviceName ~= 'APISIX'
           and span.localEndpoint.serviceName ~= 'apisix' then
+            ngx.log(ngx.ERR, "wrong serviceName: ", span.localEndpoint.serviceName)
             ngx.exit(400)
         end
 
         if span.localEndpoint.port ~= 1984 then
+            ngx.log(ngx.ERR, "wrong port: ", span.localEndpoint.port)
             ngx.exit(400)
         end
 
-        if span.localEndpoint.ipv4 ~= ngx.req.get_uri_args()['server_addr'] then
-            ngx.exit(400)
+        local server_addr = ngx.req.get_uri_args()['server_addr']
+        if server_addr then
+            if span.localEndpoint.ipv4 ~= server_addr then
+                ngx.log(ngx.ERR, "server_addr mismatched")
+                ngx.exit(400)
+            end
         end
 
     end
@@ -281,6 +326,12 @@ function _M.websocket_handshake()
         ngx.log(ngx.ERR, "failed to new websocket: ", err)
         return ngx.exit(400)
     end
+
+    local bytes, err = wb:send_text("hello")
+    if not bytes then
+        ngx.log(ngx.ERR, "failed to send text: ", err)
+        return ngx.exit(444)
+    end
 end
 _M.websocket_handshake_route = _M.websocket_handshake
 
@@ -292,7 +343,11 @@ end
 
 function _M.mysleep()
     ngx.sleep(tonumber(ngx.var.arg_seconds))
-    ngx.say(ngx.var.arg_seconds)
+    if ngx.var.arg_abort then
+        ngx.exit(ngx.ERROR)
+    else
+        ngx.say(ngx.var.arg_seconds)
+    end
 end
 
 
@@ -304,18 +359,6 @@ for i = 1, 100 do
 end
 
 
-function _M.go()
-    local action = string.sub(ngx.var.uri, 2)
-    action = string.gsub(action, "[/\\.]", "_")
-    if not action or not _M[action] then
-        return ngx.exit(404)
-    end
-
-    inject_headers()
-    return _M[action]()
-end
-
-
 function _M.headers()
     local args = ngx.req.get_uri_args()
     for name, val in pairs(args) do
@@ -324,6 +367,16 @@ function _M.headers()
     end
 
     ngx.say("/headers")
+end
+
+
+function _M.echo()
+    ngx.req.read_body()
+    local hdrs = ngx.req.get_headers()
+    for k, v in pairs(hdrs) do
+        ngx.header[k] = v
+    end
+    ngx.say(ngx.req.get_body_data() or "")
 end
 
 
@@ -341,6 +394,47 @@ end
 
 function _M.server_error()
     error("500 Internal Server Error")
+end
+
+
+function _M.log_request()
+    ngx.log(ngx.WARN, "uri: ", ngx.var.uri)
+    local headers = ngx.req.get_headers()
+
+    local keys = {}
+    for k in pairs(headers) do
+        table.insert(keys, k)
+    end
+    table.sort(keys)
+
+    for _, key in ipairs(keys) do
+        ngx.log(ngx.WARN, key, ": ", headers[key])
+    end
+end
+
+
+function _M.v3_auth_authenticate()
+    ngx.log(ngx.WARN, "etcd auth failed!")
+end
+
+
+function _M._well_known_openid_configuration()
+    local t = require("lib.test_admin")
+    local openid_data = t.read_file("t/plugin/openid-configuration.json")
+    ngx.say(openid_data)
+end
+
+
+-- Please add your fake upstream above
+function _M.go()
+    local action = string.sub(ngx.var.uri, 2)
+    action = string.gsub(action, "[/\\.-]", "_")
+    if not action or not _M[action] then
+        return ngx.exit(404)
+    end
+
+    inject_headers()
+    return _M[action]()
 end
 
 

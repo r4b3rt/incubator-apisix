@@ -43,9 +43,9 @@ __DATA__
 GET /t
 --- response_body
 done
---- grep_error_log eval
-qr/loaded plugin and sort by priority: [-\d]+ name: [\w-]+/
---- grep_error_log_out
+--- error_log
+loaded plugin and sort by priority: 22000 name: client-control
+loaded plugin and sort by priority: 12000 name: ext-plugin-pre-req
 loaded plugin and sort by priority: 11011 name: zipkin
 loaded plugin and sort by priority: 11010 name: request-id
 loaded plugin and sort by priority: 11000 name: fault-injection
@@ -86,6 +86,7 @@ loaded plugin and sort by priority: 401 name: syslog
 loaded plugin and sort by priority: 400 name: udp-logger
 loaded plugin and sort by priority: 0 name: example-plugin
 loaded plugin and sort by priority: -2000 name: serverless-post-function
+loaded plugin and sort by priority: -3000 name: ext-plugin-post-req
 
 
 
@@ -235,7 +236,7 @@ passed
 GET /hello
 --- yaml_config eval: $::yaml_config
 --- response_headers
-Apisix-Plugins: response-rewrite, limit-conn, limit-count, response-rewrite
+Apisix-Plugins: response-rewrite, limit-conn, limit-count, response-rewrite, response-rewrite
 --- response_body
 yes
 --- error_log

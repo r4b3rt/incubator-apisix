@@ -17,6 +17,7 @@
 
 local core = require("apisix.core")
 local timers = require("apisix.timers")
+local plugin = require("apisix.plugin")
 local process = require("ngx.process")
 local signal = require("resty.signal")
 local ngx = ngx
@@ -61,7 +62,7 @@ local function get_last_index(str, key)
     local _, idx = str_find(rev, key)
     local n
     if idx then
-        n = string.len(rev) - idx + 1
+        n = #rev - idx + 1
     end
 
     return n
@@ -152,11 +153,9 @@ end
 
 
 local function rotate()
-    local local_conf = core.config.local_conf()
     local interval = INTERVAL
     local max_kept = MAX_KEPT
-    local attr = core.table.try_read_attr(local_conf, "plugin_attr",
-                                          "log-rotate")
+    local attr = plugin.plugin_attr(plugin_name)
     if attr then
         interval = attr.interval or interval
         max_kept = attr.max_kept or max_kept
@@ -210,7 +209,7 @@ function _M.init()
 end
 
 
-function _M.destory()
+function _M.destroy()
     timers.unregister_timer("plugin#log-rotate", true)
 end
 

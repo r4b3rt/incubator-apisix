@@ -69,7 +69,6 @@ __DATA__
 
 
 
-
 === TEST 2: not unwanted data, GET
 --- config
     location /t {
@@ -88,14 +87,18 @@ __DATA__
             end
 
             res = json.decode(res)
-            res.node.value.create_time = nil
-            res.node.value.update_time = nil
+            local value = res.node.value
+            assert(value.create_time ~= nil)
+            value.create_time = nil
+            assert(value.update_time ~= nil)
+            value.update_time = nil
+            assert(res.count ~= nil)
+            res.count = nil
             ngx.say(json.encode(res))
         }
     }
 --- response_body
-{"action":"get","count":"1","node":{"key":"/apisix/consumers/jack","value":{"username":"jack"}}}
-
+{"action":"get","node":{"key":"/apisix/consumers/jack","value":{"username":"jack"}}}
 
 
 
@@ -122,3 +125,29 @@ __DATA__
     }
 --- response_body
 {"action":"delete","deleted":"1","key":"/apisix/consumers/jack","node":{}}
+
+
+
+=== TEST 4: list empty resources
+--- config
+    location /t {
+        content_by_lua_block {
+            local json = require("toolkit.json")
+            local t = require("lib.test_admin").test
+
+            local code, message, res = t('/apisix/admin/consumers',
+                ngx.HTTP_GET
+            )
+
+            if code >= 300 then
+                ngx.status = code
+                ngx.say(message)
+                return
+            end
+
+            res = json.decode(res)
+            ngx.say(json.encode(res))
+        }
+    }
+--- response_body
+{"action":"get","count":0,"node":{"dir":true,"key":"/apisix/consumers","nodes":{}}}

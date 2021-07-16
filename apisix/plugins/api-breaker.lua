@@ -21,7 +21,7 @@ local ngx = ngx
 local math = math
 local error = error
 
-local shared_buffer = ngx.shared['plugin-'.. plugin_name]
+local shared_buffer = ngx.shared["plugin-".. plugin_name]
 if not shared_buffer then
     error("failed to get ngx.shared dict when load plugin " .. plugin_name)
 end
@@ -100,7 +100,7 @@ end
 
 
 local function gen_lasttime_key(ctx)
-    return "unhealthy-lastime" .. core.request.get_host(ctx) .. ctx.var.uri
+    return "unhealthy-lasttime" .. core.request.get_host(ctx) .. ctx.var.uri
 end
 
 
@@ -174,7 +174,7 @@ function _M.log(conf, ctx)
         return
     end
 
-    -- unhealth process
+    -- unhealthy process
     if core.table.array_find(conf.unhealthy.http_statuses,
                              upstream_status)
     then
