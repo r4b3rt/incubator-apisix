@@ -17,43 +17,98 @@
 local core      = require("apisix.core")
 local http      = require "resty.http"
 local sub_str   = string.sub
-local url       = require "net.url"
-local tostring  = tostring
+local type      = type
 local ngx       = ngx
 local plugin_name = "authz-keycloak"
 
+local log = core.log
+local pairs = pairs
+local ipairs = ipairs
 
 local schema = {
     type = "object",
     properties = {
-        token_endpoint = {type = "string", minLength = 1, maxLength = 4096},
-        permissions = {
-            type = "array",
-            items = {
-                type = "string",
-                minLength = 1, maxLength = 100
-            },
-            uniqueItems = true
+        max_req_body_size = {
+            type = "integer",
+            minimum = 1,
+            default = 67108864,
+            description = "maximum request body size in bytes buffered into "
+                       .. "memory; larger request bodies are rejected",
         },
+        discovery = {type = "string", minLength = 1, maxLength = 4096},
+        token_endpoint = {type = "string", minLength = 1, maxLength = 4096},
+        resource_registration_endpoint = {type = "string", minLength = 1, maxLength = 4096},
+        client_id = {type = "string", minLength = 1, maxLength = 100},
+        client_secret = {type = "string", minLength = 1, maxLength = 100},
         grant_type = {
             type = "string",
             default="urn:ietf:params:oauth:grant-type:uma-ticket",
             enum = {"urn:ietf:params:oauth:grant-type:uma-ticket"},
             minLength = 1, maxLength = 100
         },
-        audience = {type = "string", minLength = 1, maxLength = 100},
-        timeout = {type = "integer", minimum = 1000, default = 3000},
         policy_enforcement_mode = {
             type = "string",
             enum = {"ENFORCING", "PERMISSIVE"},
             default = "ENFORCING"
         },
+        permissions = {
+            type = "array",
+            items = {
+                type = "string",
+                minLength = 1, maxLength = 100
+            },
+            uniqueItems = true,
+            default = {}
+        },
+        lazy_load_paths = {type = "boolean", default = false},
+        http_method_as_scope = {type = "boolean", default = false},
+        timeout = {type = "integer", minimum = 1000, default = 3000},
+        ssl_verify = {type = "boolean", default = true},
+        cache_ttl_seconds = {type = "integer", minimum = 1, default = 24 * 60 * 60},
         keepalive = {type = "boolean", default = true},
         keepalive_timeout = {type = "integer", minimum = 1000, default = 60000},
         keepalive_pool = {type = "integer", minimum = 1, default = 5},
-        ssl_verify = {type = "boolean", default = true},
+        access_denied_redirect_uri = {type = "string", minLength = 1, maxLength = 2048},
+        access_token_expires_in = {type = "integer", minimum = 1, default = 300},
+        access_token_expires_leeway = {type = "integer", minimum = 0, default = 0},
+        refresh_token_expires_in = {type = "integer", minimum = 1, default = 3600},
+        refresh_token_expires_leeway = {type = "integer", minimum = 0, default = 0},
+        password_grant_token_generation_incoming_uri = {
+            type = "string",
+            minLength = 1,
+            maxLength = 4096
+        },
     },
-    required = {"token_endpoint"}
+    encrypt_fields = {"client_secret"},
+    required = {"client_id"},
+    allOf = {
+        -- Require discovery or token endpoint.
+        {
+            anyOf = {
+                {required = {"discovery"}},
+                {required = {"token_endpoint"}}
+            }
+        },
+        -- If lazy_load_paths is true, require discovery or resource registration endpoint.
+        {
+            anyOf = {
+                {
+                    properties = {
+                        lazy_load_paths = {enum = {false}},
+                    }
+                },
+                {
+                    properties = {
+                        lazy_load_paths = {enum = {true}},
+                    },
+                    anyOf = {
+                        {required = {"discovery"}},
+                        {required = {"resource_registration_endpoint"}}
+                    }
+                }
+            }
+        }
+    }
 }
 
 
@@ -64,54 +119,50 @@ local _M = {
     schema = schema,
 }
 
+
 function _M.check_schema(conf)
+    local check = {"discovery", "token_endpoint", "resource_registration_endpoint",
+                    "access_denied_redirect_uri"}
+    core.utils.check_https(check, conf, plugin_name)
+    core.utils.check_tls_bool({"ssl_verify"}, conf, plugin_name)
+
     return core.schema.check(schema, conf)
 end
 
-local function is_path_protected(conf)
-    -- TODO if permissions are empty lazy load paths from Keycloak
-    if conf.permissions == nil then
-        return false
+
+-- Some auxiliary functions below heavily inspired by the excellent
+-- lua-resty-openidc module; see https://github.com/zmartzone/lua-resty-openidc
+
+
+-- Retrieve value from server-wide cache, if available.
+local function authz_keycloak_cache_get(type, key)
+    local dict = ngx.shared[type]
+    local value
+    if dict then
+        value = dict:get(key)
+        if value then log.debug("cache hit: type=", type, " key=", key) end
     end
-    return true
+    return value
 end
 
 
-local function evaluate_permissions(conf, token)
-    local url_decoded = url.parse(conf.token_endpoint)
-    local host = url_decoded.host
-    local port = url_decoded.port
-
-    if not port then
-        if url_decoded.scheme == "https" then
-            port = 443
+-- Set value in server-wide cache, if available.
+local function authz_keycloak_cache_set(type, key, value, exp)
+    local dict = ngx.shared[type]
+    if dict and (exp > 0) then
+        local success, err, forcible = dict:set(key, value, exp)
+        if err then
+            log.error("cache set: success=", success, " err=", err, " forcible=", forcible)
         else
-            port = 80
+            log.debug("cache set: success=", success, " err=", err, " forcible=", forcible)
         end
     end
+end
 
-    if not is_path_protected(conf) and conf.policy_enforcement_mode == "ENFORCING" then
-        return 403
-    end
 
-    local httpc = http.new()
-    httpc:set_timeout(conf.timeout)
-
-    local params = {
-        method = "POST",
-        body =  ngx.encode_args({
-            grant_type = conf.grant_type,
-            audience = conf.audience,
-            response_mode = "decision",
-            permission = conf.permissions
-        }),
-        ssl_verify = conf.ssl_verify,
-        headers = {
-            ["Content-Type"] = "application/x-www-form-urlencoded",
-            ["Authorization"] = token
-        }
-    }
-
+-- Configure request parameters.
+local function authz_keycloak_configure_params(params, conf)
+    -- Keepalive options.
     if conf.keepalive then
         params.keepalive_timeout = conf.keepalive_timeout
         params.keepalive_pool = conf.keepalive_pool
@@ -119,18 +170,589 @@ local function evaluate_permissions(conf, token)
         params.keepalive = conf.keepalive
     end
 
-    local httpc_res, httpc_err = httpc:request_uri(conf.token_endpoint, params)
+    -- TLS verification.
+    params.ssl_verify = conf.ssl_verify
 
-    if not httpc_res then
-        core.log.error("error while sending authz request to [", host ,"] port[",
-                        tostring(port), "] ", httpc_err)
-        return 500, httpc_err
+    -- Decorate parameters, maybe, and return.
+    return conf.http_request_decorator and conf.http_request_decorator(params) or params
+end
+
+
+-- Configure timeouts.
+local function authz_keycloak_configure_timeouts(httpc, timeout)
+    if timeout then
+        if type(timeout) == "table" then
+            httpc:set_timeouts(timeout.connect or 0, timeout.send or 0, timeout.read or 0)
+        else
+            httpc:set_timeout(timeout)
+        end
+    end
+end
+
+
+-- Set outgoing proxy options.
+local function authz_keycloak_configure_proxy(httpc, proxy_opts)
+    if httpc and proxy_opts and type(proxy_opts) == "table" then
+        log.debug("authz_keycloak_configure_proxy : use http proxy")
+        httpc:set_proxy_options(proxy_opts)
+    else
+        log.debug("authz_keycloak_configure_proxy : don't use http proxy")
+    end
+end
+
+
+-- Get and configure HTTP client.
+local function authz_keycloak_get_http_client(conf)
+    local httpc = http.new()
+    authz_keycloak_configure_timeouts(httpc, conf.timeout)
+    authz_keycloak_configure_proxy(httpc, conf.proxy_opts)
+    return httpc
+end
+
+
+-- Parse the JSON result from a call to the OP.
+local function authz_keycloak_parse_json_response(response)
+    local err
+    local res
+
+    -- Check the response from the OP.
+    if response.status ~= 200 then
+        err = "response indicates failure, status=" .. response.status .. ", body=" .. response.body
+    else
+        -- Decode the response and extract the JSON object.
+        res, err = core.json.decode(response.body)
+
+        if not res then
+            err = "JSON decoding failed: " .. err
+        end
     end
 
-    if httpc_res.status >= 400 then
-        core.log.error("status code: ", httpc_res.status, " msg: ", httpc_res.body)
-        return httpc_res.status, httpc_res.body
+    return res, err
+end
+
+
+-- Get the Discovery metadata from the specified URL.
+local function authz_keycloak_discover(conf)
+    log.debug("authz_keycloak_discover: URL is: " .. conf.discovery)
+
+    local json, err
+    local v = authz_keycloak_cache_get("discovery", conf.discovery)
+
+    if not v then
+        log.debug("Discovery data not in cache, making call to discovery endpoint.")
+
+        -- Make the call to the discovery endpoint.
+        local httpc = authz_keycloak_get_http_client(conf)
+
+        local params = authz_keycloak_configure_params({}, conf)
+
+        local res, error = httpc:request_uri(conf.discovery, params)
+
+        if not res then
+            err = "Accessing discovery URL (" .. conf.discovery .. ") failed: " .. error
+            log.error(err)
+        else
+            log.debug("Response data: " .. res.body)
+            json, err = authz_keycloak_parse_json_response(res)
+            if json then
+                authz_keycloak_cache_set("discovery", conf.discovery, core.json.encode(json),
+                                         conf.cache_ttl_seconds)
+            else
+                err = "could not decode JSON from Discovery data" .. (err and (": " .. err) or '')
+                log.error(err)
+            end
+        end
+    else
+        json = core.json.decode(v)
     end
+
+    return json, err
+end
+
+
+-- Turn a discovery url set in the conf dictionary into the discovered information.
+local function authz_keycloak_ensure_discovered_data(conf)
+    local err
+    if type(conf.discovery) == "string" then
+        local discovery
+        discovery, err = authz_keycloak_discover(conf)
+        if not err then
+            conf.discovery = discovery
+        end
+    end
+    return err
+end
+
+
+-- Get an endpoint from the configuration.
+local function authz_keycloak_get_endpoint(conf, endpoint)
+    if conf and conf[endpoint] then
+        -- Use explicit entry.
+        return conf[endpoint]
+    elseif conf and conf.discovery and type(conf.discovery) == "table" then
+        -- Use discovery data.
+        return conf.discovery[endpoint]
+    end
+
+    -- Unable to obtain endpoint.
+    return nil
+end
+
+
+-- Return the token endpoint from the configuration.
+local function authz_keycloak_get_token_endpoint(conf)
+    return authz_keycloak_get_endpoint(conf, "token_endpoint")
+end
+
+
+-- Return the resource registration endpoint from the configuration.
+local function authz_keycloak_get_resource_registration_endpoint(conf)
+    return authz_keycloak_get_endpoint(conf, "resource_registration_endpoint")
+end
+
+
+-- Return access_token expires_in value (in seconds).
+local function authz_keycloak_access_token_expires_in(conf, expires_in)
+    return (expires_in or conf.access_token_expires_in)
+           - 1 - conf.access_token_expires_leeway
+end
+
+
+-- Return refresh_token expires_in value (in seconds).
+local function authz_keycloak_refresh_token_expires_in(conf, expires_in)
+    return (expires_in or conf.refresh_token_expires_in)
+           - 1 - conf.refresh_token_expires_leeway
+end
+
+
+-- Ensure a valid service account access token is available for the configured client.
+local function authz_keycloak_ensure_sa_access_token(conf)
+    local client_id = conf.client_id
+    local ttl = conf.cache_ttl_seconds
+    local token_endpoint = authz_keycloak_get_token_endpoint(conf)
+
+    if not token_endpoint then
+        log.error("Unable to determine token endpoint.")
+        return 503, "Unable to determine token endpoint."
+    end
+
+    local session = authz_keycloak_cache_get("access-tokens", token_endpoint .. ":"
+                                             .. client_id)
+
+    if session then
+        -- Decode session string.
+        local err
+        session, err = core.json.decode(session)
+
+        if not session then
+            -- Should never happen.
+            return 500, err
+        end
+
+        local current_time = ngx.time()
+
+        if current_time < session.access_token_expiration then
+            -- Access token is still valid.
+            log.debug("Access token is still valid.")
+            return session.access_token
+        else
+            -- Access token has expired.
+            log.debug("Access token has expired.")
+            if session.refresh_token
+               and (not session.refresh_token_expiration
+                    or current_time < session.refresh_token_expiration) then
+                -- Try to get a new access token, using the refresh token.
+                log.debug("Trying to get new access token using refresh token.")
+
+                local httpc = authz_keycloak_get_http_client(conf)
+
+                local params = {
+                    method = "POST",
+                    body = ngx.encode_args({
+                        grant_type = "refresh_token",
+                        client_id = client_id,
+                        client_secret = conf.client_secret,
+                        refresh_token = session.refresh_token,
+                    }),
+                    headers = {
+                        ["Content-Type"] = "application/x-www-form-urlencoded"
+                    }
+                }
+
+                params = authz_keycloak_configure_params(params, conf)
+
+                local res, err = httpc:request_uri(token_endpoint, params)
+
+                if not res then
+                    err = "Accessing token endpoint URL (" .. token_endpoint
+                          .. ") failed: " .. err
+                    log.error(err)
+                    return nil, err
+                end
+
+                log.debug("Response data: " .. res.body)
+                local json, err = authz_keycloak_parse_json_response(res)
+
+                if not json then
+                    err = "Could not decode JSON from token endpoint"
+                          .. (err and (": " .. err) or '.')
+                    log.error(err)
+                    return nil, err
+                end
+
+                if not json.access_token then
+                    -- Clear session.
+                    log.debug("Answer didn't contain a new access token. Clearing session.")
+                    session = nil
+                else
+                    log.debug("Got new access token.")
+                    -- Save access token.
+                    session.access_token = json.access_token
+
+                    -- Calculate and save access token expiry time.
+                    session.access_token_expiration = current_time
+                            + authz_keycloak_access_token_expires_in(conf, json.expires_in)
+
+                    -- Save refresh token, maybe.
+                    if json.refresh_token ~= nil then
+                        log.debug("Got new refresh token.")
+                        session.refresh_token = json.refresh_token
+
+                        -- Calculate and save refresh token expiry time.
+                        session.refresh_token_expiration = current_time
+                                + authz_keycloak_refresh_token_expires_in(conf,
+                                                                          json.refresh_expires_in)
+                    end
+
+                    authz_keycloak_cache_set("access-tokens",
+                                             token_endpoint .. ":" .. client_id,
+                                             core.json.encode(session), ttl)
+                end
+            else
+                -- No refresh token available, or it has expired. Clear session.
+                log.debug("No or expired refresh token. Clearing session.")
+                session = nil
+            end
+        end
+    end
+
+    if not session then
+        -- No session available. Create a new one.
+
+        log.debug("Getting access token for Protection API from token endpoint.")
+        local httpc = authz_keycloak_get_http_client(conf)
+
+        local params = {
+            method = "POST",
+            body = ngx.encode_args({
+                grant_type = "client_credentials",
+                client_id = client_id,
+                client_secret = conf.client_secret,
+            }),
+            headers = {
+                ["Content-Type"] = "application/x-www-form-urlencoded"
+            }
+        }
+
+        params = authz_keycloak_configure_params(params, conf)
+
+        local current_time = ngx.time()
+
+        local res, err = httpc:request_uri(token_endpoint, params)
+
+        if not res then
+            err = "Accessing token endpoint URL (" .. token_endpoint .. ") failed: " .. err
+            log.error(err)
+            return nil, err
+        end
+
+        log.debug("Response data: " .. res.body)
+        local json, err = authz_keycloak_parse_json_response(res)
+
+        if not json then
+          err = "Could not decode JSON from token endpoint" .. (err and (": " .. err) or '.')
+          log.error(err)
+          return nil, err
+        end
+
+        if not json.access_token then
+            err = "Response does not contain access_token field."
+            log.error(err)
+            return nil, err
+        end
+
+        session = {}
+
+        -- Save access token.
+        session.access_token = json.access_token
+
+        -- Calculate and save access token expiry time.
+        session.access_token_expiration = current_time
+                + authz_keycloak_access_token_expires_in(conf, json.expires_in)
+
+        -- Save refresh token, maybe.
+        if json.refresh_token ~= nil then
+            session.refresh_token = json.refresh_token
+
+            -- Calculate and save refresh token expiry time.
+            session.refresh_token_expiration = current_time
+                    + authz_keycloak_refresh_token_expires_in(conf, json.refresh_expires_in)
+        end
+
+        authz_keycloak_cache_set("access-tokens", token_endpoint .. ":" .. client_id,
+                                 core.json.encode(session), ttl)
+    end
+
+    return session.access_token
+end
+
+
+-- Resolve a URI to one or more resource IDs.
+local function authz_keycloak_resolve_resource(conf, uri, sa_access_token)
+    -- Get resource registration endpoint URL.
+    local resource_registration_endpoint = authz_keycloak_get_resource_registration_endpoint(conf)
+
+    if not resource_registration_endpoint then
+        local err = "Unable to determine registration endpoint."
+        log.error(err)
+        return nil, err
+    end
+
+    log.debug("Resource registration endpoint: ", resource_registration_endpoint)
+
+    local httpc = authz_keycloak_get_http_client(conf)
+
+    local params = {
+        method = "GET",
+        query = {uri = uri, matchingUri = "true"},
+        headers = {
+            ["Authorization"] = "Bearer " .. sa_access_token
+        }
+    }
+
+    params = authz_keycloak_configure_params(params, conf)
+
+    local res, err = httpc:request_uri(resource_registration_endpoint, params)
+
+    if not res then
+        err = "Accessing resource registration endpoint URL (" .. resource_registration_endpoint
+              .. ") failed: " .. err
+        log.error(err)
+        return nil, err
+    end
+
+    log.debug("Response data: " .. res.body)
+    res.body = '{"resources": ' .. res.body .. '}'
+    local json, err = authz_keycloak_parse_json_response(res)
+
+    if not json then
+      err = "Could not decode JSON from resource registration endpoint"
+            .. (err and (": " .. err) or '.')
+      log.error(err)
+      return nil, err
+    end
+
+    return json.resources
+end
+
+
+-- Split "resource#scope1, scope2" into the resource and its scopes.
+local function parse_permission(permission)
+    local resource, scopes = permission:match("^([^#]*)#?(.*)$")
+    local list = {}
+    for scope in scopes:gmatch("[^,]+") do
+        scope = scope:match("^%s*(.-)%s*$")
+        if scope ~= "" then
+            core.table.insert(list, scope)
+        end
+    end
+
+    return resource:match("^%s*(.-)%s*$"), list
+end
+
+
+-- Check that a granted permission covers the resource and all its scopes.
+local function is_permission_granted(granted, resource, scopes)
+    for _, perm in ipairs(granted) do
+        if type(perm) == "table"
+            and (resource == "" or perm.rsname == resource or perm.rsid == resource)
+        then
+            local granted_scopes = {}
+            if type(perm.scopes) == "table" then
+                for _, scope in ipairs(perm.scopes) do
+                    granted_scopes[scope] = true
+                end
+            end
+
+            local all_granted = true
+            for _, scope in ipairs(scopes) do
+                if not granted_scopes[scope] then
+                    all_granted = false
+                    break
+                end
+            end
+
+            if all_granted then
+                return true
+            end
+        end
+    end
+
+    return false
+end
+
+
+local function evaluate_permissions(conf, ctx, token)
+    -- Ensure discovered data.
+    local err = authz_keycloak_ensure_discovered_data(conf)
+    if err then
+        return 503, err
+    end
+
+    local permission
+
+    if conf.lazy_load_paths then
+        -- Ensure service account access token.
+        local sa_access_token, err = authz_keycloak_ensure_sa_access_token(conf)
+        if err then
+            log.error(err)
+            return 503, err
+        end
+
+        -- Resolve URI to resource(s).
+        permission, err = authz_keycloak_resolve_resource(conf, ctx.var.uri,
+                                                          sa_access_token)
+
+        -- Check result.
+        if permission == nil then
+            -- No result back from resource registration endpoint.
+            log.error(err)
+            return 503, err
+        end
+    else
+        -- Use statically configured permissions.
+        permission = conf.permissions
+    end
+
+    -- Return 403 or 307 if permission is empty and enforcement mode is "ENFORCING".
+    if #permission == 0 and conf.policy_enforcement_mode == "ENFORCING" then
+        -- Return Keycloak-style message for consistency.
+        if conf.access_denied_redirect_uri then
+            core.response.set_header("Location", conf.access_denied_redirect_uri)
+            return 307
+        end
+        return 403, '{"error":"access_denied","error_description":"not_authorized"}'
+    end
+
+    -- Determine scope from HTTP method, maybe.
+    local scope
+    if conf.http_method_as_scope then
+        scope = ctx.var.request_method
+    end
+
+    -- Rebuild as "resource#scope1,scope2" plus the method scope, without
+    -- spaces since Keycloak doesn't trim scopes. New tables keep conf intact.
+    local requested = core.table.new(#permission, 0)
+    local encoded = core.table.new(#permission, 0)
+    for i, v in ipairs(permission) do
+        local resource, scopes = parse_permission(v)
+        if scope then
+            core.table.insert(scopes, scope)
+        end
+
+        requested[i] = {resource = resource, scopes = scopes}
+        if #scopes > 0 then
+            encoded[i] = resource .. "#" .. core.table.concat(scopes, ",")
+        else
+            encoded[i] = resource
+        end
+    end
+    permission = encoded
+
+    for k, v in pairs(permission) do
+        log.debug("Requesting permission ", v, ".")
+    end
+
+    -- Get token endpoint URL.
+    local token_endpoint = authz_keycloak_get_token_endpoint(conf)
+    if not token_endpoint then
+        err = "Unable to determine token endpoint."
+        log.error(err)
+        return 503, err
+    end
+    log.debug("Token endpoint: ", token_endpoint)
+
+    local httpc = authz_keycloak_get_http_client(conf)
+
+    local params = {
+        method = "POST",
+        body = ngx.encode_args({
+            grant_type = conf.grant_type,
+            audience = conf.client_id,
+            response_mode = "permissions",
+            permission = permission
+        }),
+        headers = {
+            ["Content-Type"] = "application/x-www-form-urlencoded",
+            ["Authorization"] = token
+        }
+    }
+
+    params = authz_keycloak_configure_params(params, conf)
+
+    local res, err = httpc:request_uri(token_endpoint, params)
+
+    if not res then
+        err = "Error while sending authz request to " .. token_endpoint .. ": " .. err
+        log.error(err)
+        return 503
+    end
+
+    log.debug("Response status: ", res.status, ", data: ", res.body)
+
+    if res.status == 403 then
+        -- Request permanently denied, e.g. due to lacking permissions.
+        log.debug('Request denied: HTTP 403 Forbidden. Body: ', res.body)
+        if conf.access_denied_redirect_uri then
+            core.response.set_header("Location", conf.access_denied_redirect_uri)
+            return 307
+        end
+
+        return res.status, res.body
+    elseif res.status == 401 then
+        -- Request temporarily denied, e.g access token not valid.
+        log.debug('Request denied: HTTP 401 Unauthorized. Body: ', res.body)
+        return res.status, res.body
+    elseif res.status >= 400 then
+        -- Some other error. Log full response.
+        log.error('Request denied: Token endpoint returned an error (status: ',
+                  res.status, ', body: ', res.body, ').')
+        return res.status, res.body
+    end
+
+    local granted
+    granted, err = authz_keycloak_parse_json_response(res)
+    if type(granted) ~= "table" then
+        err = "Could not decode JSON from token endpoint"
+              .. (err and (": " .. err) or ".")
+        log.error(err)
+        return 503, err
+    end
+
+    -- Every requested permission must be granted.
+    for i, req in ipairs(requested) do
+        if not is_permission_granted(granted, req.resource, req.scopes) then
+            log.debug("Request denied: permission not granted: ", permission[i])
+            if conf.access_denied_redirect_uri then
+                core.response.set_header("Location", conf.access_denied_redirect_uri)
+                return 307
+            end
+
+            return 403, '{"error":"access_denied","error_description":"not_authorized"}'
+        end
+    end
+
+    -- Request accepted.
 end
 
 
@@ -147,16 +769,97 @@ local function fetch_jwt_token(ctx)
     return token
 end
 
+-- To get new access token by calling get token api
+local function generate_token_using_password_grant(conf,ctx)
+    log.debug("generate_token_using_password_grant Function Called")
+
+    local body, err = core.request.get_body(conf.max_req_body_size)
+    if err or not body then
+        log.error("Failed to get request body: ", err)
+        return 503
+    end
+    local parameters = core.string.decode_args(body)
+
+    local username = parameters["username"]
+    local password = parameters["password"]
+
+    if not username then
+        local err = "username is missing."
+        log.warn(err)
+        return 422, {message = err}
+    end
+    if not password then
+        local err = "password is missing."
+        log.warn(err)
+        return 422, {message = err}
+    end
+
+    local client_id = conf.client_id
+
+    local token_endpoint = authz_keycloak_get_token_endpoint(conf)
+
+    if not token_endpoint then
+        local err = "Unable to determine token endpoint."
+        log.error(err)
+        return 503, {message = err}
+    end
+    local httpc = authz_keycloak_get_http_client(conf)
+
+    local params = {
+        method = "POST",
+        body = ngx.encode_args({
+            grant_type = "password",
+            client_id = client_id,
+            client_secret = conf.client_secret,
+            username = username,
+            password = password
+        }),
+        headers = {
+            ["Content-Type"] = "application/x-www-form-urlencoded"
+        }
+    }
+
+    params = authz_keycloak_configure_params(params, conf)
+
+    local res, err = httpc:request_uri(token_endpoint, params)
+
+    if not res then
+        err = "Accessing token endpoint URL (" .. token_endpoint
+              .. ") failed: " .. err
+        log.error(err)
+        return 401, {message = "Accessing token endpoint URL failed."}
+    end
+
+    log.debug("Response data: " .. res.body)
+    local json, err = authz_keycloak_parse_json_response(res)
+
+    if not json then
+        err = "Could not decode JSON from response"
+              .. (err and (": " .. err) or '.')
+        log.error(err)
+        return 401, {message = "Could not decode JSON from response."}
+    end
+
+    return res.status, res.body
+end
 
 function _M.access(conf, ctx)
-    core.log.debug("hit keycloak-auth access")
+    local headers = core.request.headers(ctx)
+    local need_grant_token = conf.password_grant_token_generation_incoming_uri and
+        ctx.var.request_uri == conf.password_grant_token_generation_incoming_uri and
+        headers["content-type"] == "application/x-www-form-urlencoded" and
+        core.request.get_method() == "POST"
+    if need_grant_token then
+        return generate_token_using_password_grant(conf,ctx)
+    end
+    log.debug("hit keycloak-auth access")
     local jwt_token, err = fetch_jwt_token(ctx)
     if not jwt_token then
-        core.log.error("failed to fetch JWT token: ", err)
+        log.error("failed to fetch JWT token: ", err)
         return 401, {message = "Missing JWT token in request"}
     end
 
-    local status, body = evaluate_permissions(conf, jwt_token)
+    local status, body = evaluate_permissions(conf, ctx, jwt_token)
     if status then
         return status, body
     end

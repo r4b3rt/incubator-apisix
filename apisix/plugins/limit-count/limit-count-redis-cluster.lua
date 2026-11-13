@@ -15,120 +15,115 @@
 -- limitations under the License.
 --
 
-local rediscluster = require("resty.rediscluster")
+local redis_cluster = require("apisix.utils.rediscluster")
 local core = require("apisix.core")
-local resty_lock = require("resty.lock")
+local delayed_syncer = require("apisix.plugins.limit-count.delayed-syncer")
+local sliding_window = require("apisix.plugins.limit-count.sliding-window.sliding-window")
+local sliding_window_store = require("apisix.plugins.limit-count."
+                                     .. "sliding-window.store.redis")
+local limit_count_local = require("apisix.plugins.limit-count.limit-count-local")
+local util = require("apisix.plugins.limit-count.util")
+
+local timer_at = ngx.timer.at
 local setmetatable = setmetatable
-local tostring = tostring
-local ipairs = ipairs
 
 local _M = {}
-
 
 local mt = {
     __index = _M
 }
 
-
-local function new_redis_cluster(conf)
-    local config = {
-        name = "apisix-redis-cluster",
-        serv_list = {},
-        read_timeout = conf.redis_timeout,
-        auth = conf.redis_password,
-        dict_name = "plugin-limit-count-redis-cluster-slot-lock",
-    }
-
-    for i, conf_item in ipairs(conf.redis_cluster_nodes) do
-        local host, port, err = core.utils.parse_addr(conf_item)
-        if err then
-            return nil, "failed to parse address: " .. conf_item
-                        .. " err: " .. err
-        end
-
-        config.serv_list[i] = {ip = host, port = port}
-    end
-
-    local red_cli, err = rediscluster:new(config)
-    if not red_cli then
-        return nil, "failed to new redis cluster: " .. err
-    end
-
-    return red_cli
-end
-
-
-function _M.new(plugin_name, limit, window, conf)
-    local red_cli, err = new_redis_cluster(conf)
+function _M.new(plugin_name, limit, window, conf, key_version)
+    local red_cli, err = redis_cluster.new(conf, "plugin-limit-count-redis-cluster-slot-lock")
     if not red_cli then
         return nil, err
     end
 
+    local fallback_limiter, fallback_err = limit_count_local.new(plugin_name,
+                                                                 limit, window,
+                                                                 conf.window_type)
+    if not fallback_limiter then
+        return nil, fallback_err
+    end
+
+    local enable_delayed_sync = conf.sync_interval and conf.sync_interval ~= -1
+
+    if conf.window_type == "sliding" then
+        local sw_limit_count
+        sw_limit_count, err = sliding_window.new(sliding_window_store, limit, window, red_cli)
+        if not sw_limit_count then
+            return nil, err
+        end
+
+        sw_limit_count.fallback_limiter = fallback_limiter
+        sw_limit_count.plugin_name = plugin_name
+        local self = {
+            limit = limit,
+            window_type = conf.window_type,
+            limit_count = sw_limit_count,
+        }
+
+        if enable_delayed_sync then
+            local ds, ds_err = delayed_syncer.new(plugin_name, limit, window,
+                conf, self.limit_count)
+            if not ds then
+                return nil, ds_err
+            end
+            self.delayed_syncer = ds
+        end
+        return setmetatable(self, mt)
+    end
+
     local self = {
-        limit = limit, window = window, conf = conf,
-        plugin_name = plugin_name, red_cli =red_cli
+        limit = limit,
+        window = window,
+        conf = conf,
+        plugin_name = plugin_name,
+        key_version = key_version,
+        red_cli = red_cli,
+        fallback_limiter = fallback_limiter,
     }
+
+    if enable_delayed_sync then
+        local ds, ds_err = delayed_syncer.new(plugin_name, limit, window, conf, self)
+        if not ds then
+            return nil, ds_err
+        end
+        self.delayed_syncer = ds
+    end
 
     return setmetatable(self, mt)
 end
 
-
-function _M.incoming(self, key)
-    local red = self.red_cli
-    local limit = self.limit
-    local window = self.window
-    local remaining
-    key = self.plugin_name .. tostring(key)
-
-    local ret, err = red:ttl(key)
-    if not ret then
-        return false, "failed to get redis `" .. key .."` ttl: " .. err
-    end
-
-    core.log.info("ttl key: ", key, " ret: ", ret, " err: ", err)
-    if ret < 0 then
-        local lock, err = resty_lock:new("plugin-limit-count")
-        if not lock then
-            return false, "failed to create lock: " .. err
-        end
-
-        local elapsed, err = lock:lock(key)
-        if not elapsed then
-            return false, "failed to acquire the lock: " .. err
-        end
-
-        ret = red:ttl(key)
-        if ret < 0 then
-            local ok, err = lock:unlock()
-            if not ok then
-                return false, "failed to unlock: " .. err
-            end
-
-            ret, err = red:set(key, limit -1, "EX", window)
-            if not ret then
-                return nil, err
-            end
-
-            return 0, limit -1
-        end
-
-        local ok, err = lock:unlock()
-        if not ok then
-            return false, "failed to unlock: " .. err
-        end
-    end
-
-    remaining, err = red:incrby(key, -1)
+function _M.incoming_delayed(self, key, cost, syncer_id)
+    local remaining, reset, err, info = self.delayed_syncer:delayed_sync(key, cost, syncer_id)
     if not remaining then
-        return nil, err
+        return nil, err, 0
     end
-
     if remaining < 0 then
-        return nil, "rejected"
+        return nil, "rejected", reset, info
     end
-
-    return 0, remaining
+    return 0, remaining, reset, info
 end
 
+function _M.incoming(self, key, cost)
+    if self.window_type == "sliding" then
+        return self.limit_count:incoming(key, cost)
+    end
+
+    return util.redis_incoming(self, key, cost, false)
+end
+
+function _M.log_phase_incoming(self, key, cost)
+    local ok, err = timer_at(0, function ()
+        local delay, incoming_err = self:incoming(key, cost)
+        if not delay and incoming_err ~= "rejected" then
+            core.log.error("failed to sync limit count in log phase: ", incoming_err)
+        end
+    end)
+    if not ok then
+        core.log.error("failed to schedule timer: ", err)
+    end
+end
 
 return _M

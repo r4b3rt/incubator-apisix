@@ -52,8 +52,6 @@ __DATA__
 GET /t
 --- response_body
 done
---- no_error_log
-[error]
 
 
 
@@ -72,12 +70,9 @@ done
     }
 --- request
 GET /t
---- response_body_like eval
-qr/property "(conn|default_conn_delay)" is required
+--- response_body
+value should match only one schema, but matches none
 done
-/
---- no_error_log
-[error]
 
 
 
@@ -105,30 +100,6 @@ done
                         },
                         "desc": "upstream_node",
                         "uri": "/hello"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                                "limit-req": {
-                                    "rate": 4,
-                                    "burst": 2,
-                                    "rejected_code": 503,
-                                    "key": "remote_addr"
-                                }
-                            },
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1980": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "desc": "upstream_node",
-                            "uri": "/hello"
-                        },
-                        "key": "/apisix/routes/1"
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -142,8 +113,6 @@ done
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -152,8 +121,6 @@ passed
 ["GET /hello", "GET /hello", "GET /hello", "GET /hello"]
 --- error_code eval
 [200, 200, 200, 200]
---- no_error_log
-[error]
 
 
 
@@ -180,29 +147,6 @@ passed
                             "type": "roundrobin"
                         },
                         "uri": "/hello"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                                "limit-req": {
-                                    "rate": 0.1,
-                                    "burst": 0.1,
-                                    "rejected_code": 503,
-                                    "key": "remote_addr"
-                                }
-                            },
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1980": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "uri": "/hello"
-                        },
-                        "key": "/apisix/routes/1"
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -216,8 +160,6 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -226,8 +168,6 @@ passed
 ["GET /hello", "GET /hello", "GET /hello", "GET /hello"]
 --- error_code eval
 [200, 503, 503, 503]
---- no_error_log
-[error]
 
 
 
@@ -254,29 +194,6 @@ passed
                             "type": "roundrobin"
                         },
                         "uri": "/hello"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                                "limit-req": {
-                                    "rate": -1,
-                                    "burst": 0.1,
-                                    "rejected_code": 503,
-                                    "key": "remote_addr"
-                                }
-                            },
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1980": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "uri": "/hello"
-                        },
-                        "key": "/apisix/routes/1"
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -291,8 +208,6 @@ GET /t
 --- error_code: 400
 --- response_body
 {"error_msg":"failed to check the configuration of plugin limit-req err: property \"rate\" validation failed: expected -1 to be greater than 0"}
---- no_error_log
-[error]
 
 
 
@@ -326,8 +241,6 @@ GET /t
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -336,8 +249,6 @@ passed
 ["GET /hello", "GET /hello", "GET /hello", "GET /hello"]
 --- error_code eval
 [200, 200, 200, 200]
---- no_error_log
-[error]
 
 
 
@@ -378,8 +289,6 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -406,18 +315,6 @@ passed
                         },
                         "desc": "upstream_node",
                         "uri": "/hello"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                                "limit-req": {
-                                    "rejected_code": 503,
-                                    "key": "remote_addr"
-                                }
-                            }
-                        }
-                    }
                 }]]
                 )
 
@@ -431,8 +328,6 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -456,29 +351,12 @@ passed
                             "key": "consumer_name"
                         }
                     }
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "username": "new_consumer",
-                            "plugins": {
-                               "key-auth": {
-                                    "key": "auth-jack"
-                                },
-                                "limit-req": {
-                                    "rate": 3,
-                                    "burst": 2,
-                                    "rejected_code": 403,
-                                    "key": "consumer_name"
-                                }
-                            }
-                        }
-                    },
-                    "action": "set"
                 }]]
                 )
 
-            ngx.status = code
+            if code >= 300 then
+                ngx.status = code
+            end
             ngx.say(body)
         }
     }
@@ -486,8 +364,6 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -510,25 +386,6 @@ passed
                         },
                         "desc": "upstream_node",
                         "uri": "/hello"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                                "key-auth": {}
-                            },
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1980": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "desc": "upstream_node",
-                            "uri": "/hello"
-                        },
-                        "key": "/apisix/routes/1"
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -542,8 +399,6 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -554,8 +409,6 @@ passed
 apikey: auth-jack
 --- error_code eval
 [200, 200, 200]
---- no_error_log
-[error]
 
 
 
@@ -579,25 +432,6 @@ apikey: auth-jack
                             "key": "consumer_name"
                         }
                     }
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "username": "new_consumer",
-                            "plugins": {
-                               "key-auth": {
-                                    "key": "auth-jack"
-                                },
-                                "limit-req": {
-                                    "rate": 0.1,
-                                    "burst": 0.1,
-                                    "rejected_code": 403,
-                                    "key": "consumer_name"
-                                }
-                            }
-                        }
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -609,8 +443,6 @@ apikey: auth-jack
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -620,9 +452,7 @@ passed
 --- more_headers
 apikey: auth-jack
 --- error_code eval
-[403, 403, 403, 403]
---- no_error_log
-[error]
+[200, 403, 403, 403]
 
 
 
@@ -649,29 +479,6 @@ apikey: auth-jack
                         },
                         "desc": "upstream_node",
                         "uri": "/hello"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                                "limit-req": {
-                                    "rate": 2,
-                                    "burst": 1,
-                                    "key": "consumer_name"
-                                }
-                            },
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1980": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "desc": "upstream_node",
-                            "uri": "/hello"
-                        },
-                        "key": "/apisix/routes/1"
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -685,19 +492,16 @@ apikey: auth-jack
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
 === TEST 18: get "consumer_name" is empty
 --- request
 GET /hello
---- error_code: 500
 --- response_body
-{"message":"Consumer not found."}
+hello world
 --- error_log
-[error]
+The value of the configured key is empty, use client IP instead
 
 
 
@@ -716,12 +520,10 @@ GET /hello
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 20： delete route
+=== TEST 20: delete route
 --- config
     location /t {
         content_by_lua_block {
@@ -736,5 +538,23 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
+
+
+
+=== TEST 21: check_schema failed (the `rate` attribute is equal to 0)
+--- config
+    location /t {
+        content_by_lua_block {
+            local plugin = require("apisix.plugins.limit-req")
+            local ok, err = plugin.check_schema({rate = 0, burst = 0, rejected_code = 503, key = 'remote_addr'})
+            if not ok then
+                ngx.say(err)
+            end
+
+            ngx.say("done")
+        }
+    }
+--- request
+GET /t
+--- response_body eval
+qr/property \"rate\" validation failed: expected 0 to be greater than 0/

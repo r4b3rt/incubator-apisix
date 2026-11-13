@@ -48,14 +48,17 @@ qr/random seed \d+(\.\d+)?(e\+\d+)?\ntwice: false/
         content_by_lua_block {
             local parse_addr = require("apisix.core.utils").parse_addr
             local cases = {
-                {addr = "127.0.0.1", host = "127.0.0.1", port = 80},
+                {addr = "127.0.0.1", host = "127.0.0.1"},
                 {addr = "127.0.0.1:90", host = "127.0.0.1", port = 90},
-                {addr = "www.test.com", host = "www.test.com", port = 80},
+                {addr = "www.test.com", host = "www.test.com"},
                 {addr = "www.test.com:90", host = "www.test.com", port = 90},
-                {addr = "[127.0.0.1:90", host = "[127.0.0.1:90", port = 80},
-                {addr = "[::1]", host = "[::1]", port = 80},
+                {addr = "localhost", host = "localhost"},
+                {addr = "localhost:90", host = "localhost", port = 90},
+                {addr = "[127.0.0.1:90", host = "[127.0.0.1:90"},
+                {addr = "[::1]", host = "[::1]"},
                 {addr = "[::1]:1234", host = "[::1]", port = 1234},
                 {addr = "[::1234:1234]:12345", host = "[::1234:1234]", port = 12345},
+                {addr = "::1", host = "::1"},
             }
             for _, case in ipairs(cases) do
                 local host, port = parse_addr(case.addr)
@@ -66,8 +69,6 @@ qr/random seed \d+(\.\d+)?(e\+\d+)?\ntwice: false/
     }
 --- request
 GET /t
---- no_error_log
-[error]
 
 
 
@@ -78,9 +79,10 @@ GET /t
             local core = require("apisix.core")
             local resolvers = {"8.8.8.8"}
             core.utils.set_resolver(resolvers)
-            local ip_info, err = core.utils.dns_parse("github.com", resolvers)
+            local domain = "github.com"
+            local ip_info, err = core.utils.dns_parse(domain)
             if not ip_info then
-                core.log.error("failed to parse domain: ", host, ", error: ",err)
+                core.log.error("failed to parse domain: ", domain, ", error: ",err)
             end
             ngx.say(require("toolkit.json").encode(ip_info))
         }
@@ -89,8 +91,6 @@ GET /t
 GET /t
 --- response_body eval
 qr/"address":.+,"name":"github.com"/
---- no_error_log
-[error]
 
 
 
@@ -99,12 +99,13 @@ qr/"address":.+,"name":"github.com"/
     location /t {
         content_by_lua_block {
             local core = require("apisix.core")
-            local ip_info, err = core.utils.dns_parse("github.com")
+            local domain = "github.com"
+            local ip_info, err = core.utils.dns_parse(domain)
             if not ip_info then
-                core.log.error("failed to parse domain: ", host, ", error: ",err)
+                core.log.error("failed to parse domain: ", domain, ", error: ",err)
             end
             core.log.info("ip_info: ", require("toolkit.json").encode(ip_info))
-            ngx.say("resolvers: ", require("toolkit.json").encode(core.utils.resolvers))
+            ngx.say("resolvers: ", require("toolkit.json").encode(core.utils.get_resolver()))
         }
     }
 --- request
@@ -113,8 +114,6 @@ GET /t
 resolvers: ["8.8.8.8","114.114.114.114"]
 --- error_log eval
 qr/"address":.+,"name":"github.com"/
---- no_error_log
-[error]
 
 
 
@@ -123,8 +122,6 @@ qr/"address":.+,"name":"github.com"/
 apisix:
   node_listen: 1984
   enable_server_tokens: false
-  admin_key: null
-
 --- config
 location /t {
     content_by_lua_block {
@@ -197,8 +194,6 @@ received: Connection: close
 received: Server: APISIX
 received: \nreceived: hello world
 close: 1 nil}
---- no_error_log
-[error]
 
 
 
@@ -217,13 +212,27 @@ close: 1 nil}
                 "$you and $me",
                 "$eva and $me",
                 "$you and \\$me",
+                "${you}_${me}",
+                "${you}${me}",
+                "${you}$me",
+                "${you??}$me",
+                "${you??Rose}$me",
+                "${she??Rose}$me",
+                "${she ??Rose}$me",
+                "${she?? Rose}$me",
+                "${she ?? Rose}$me",
+                "${she   ??     Rose}$me",
+                "${ she ?? Rose }$me",
+                "${you ?? Rose}$he??",
+                "${you ?? Rose}$he??Jack",
             }
             local ctx = {
                 you = "John",
                 me = "David",
             }
             for _, case in ipairs(cases) do
-                ngx.say("res:", resolve_var(case, ctx))
+                local res = resolve_var(case, ctx)
+                ngx.say("res:", res)
             end
         }
     }
@@ -239,3 +248,427 @@ res:tell David to
 res:John and David
 res: and David
 res:John and \$me
+res:John_David
+res:JohnDavid
+res:JohnDavid
+res:JohnDavid
+res:JohnDavid
+res:RoseDavid
+res:RoseDavid
+res:RoseDavid
+res:RoseDavid
+res:RoseDavid
+res:RoseDavid
+res:John??
+res:John??Jack
+
+
+
+=== TEST 7: resolve host from /etc/hosts
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            local domain = "test.com"
+            local ip_info, err = core.utils.dns_parse(domain)
+            if not ip_info then
+                core.log.error("failed to parse domain: ", domain, ", error: ",err)
+                return
+            end
+            ngx.say("ip_info: ", require("toolkit.json").encode(ip_info))
+        }
+    }
+--- request
+GET /t
+--- response_body
+ip_info: {"address":"127.0.0.1","class":1,"name":"test.com","ttl":315360000,"type":1}
+
+
+
+=== TEST 8: search host with '.org' suffix
+--- yaml_config
+apisix:
+  node_listen: 1984
+  enable_resolv_search_opt: true
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            local domain = "apisix"
+            local ip_info, err = core.utils.dns_parse(domain)
+            if not ip_info then
+                core.log.error("failed to parse domain: ", domain, ", error: ",err)
+                return
+            end
+            ngx.say("ip_info: ", require("toolkit.json").encode(ip_info))
+        }
+    }
+--- request
+GET /t
+--- response_body_like
+.+"name":"apisix\.apache\.org".+
+
+
+
+=== TEST 9: disable search option
+--- yaml_config
+apisix:
+  node_listen: 1984
+  enable_resolv_search_opt: false
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            local domain = "apisix"
+            local ip_info, err = core.utils.dns_parse(domain)
+            if not ip_info then
+                core.log.error("failed to parse domain: ", domain, ", error: ",err)
+                return
+            end
+            ngx.say("ip_info: ", require("toolkit.json").encode(ip_info))
+        }
+    }
+--- request
+GET /t
+--- error_log
+error: failed to query the DNS server
+--- timeout: 10
+
+
+
+=== TEST 10: test dns config with ipv6 enable
+--- yaml_config
+apisix:
+  enable_ipv6: true
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            local domain = "ipv6.local"
+            local ip_info, err = core.utils.dns_parse(domain)
+            if not ip_info then
+                core.log.error("failed to parse domain: ", domain, ", error: ",err)
+                return
+            end
+            ngx.say("ip_info: ", require("toolkit.json").encode(ip_info))
+        }
+    }
+--- request
+GET /t
+--- response_body
+ip_info: {"address":"[::1]","class":1,"name":"ipv6.local","ttl":315360000,"type":28}
+
+
+
+=== TEST 11: test dns config with ipv6 disable
+--- yaml_config
+apisix:
+  enable_ipv6: false
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            local domain = "ipv6.local"
+            local ip_info, err = core.utils.dns_parse(domain)
+            if not ip_info then
+                core.log.error("failed to parse domain: ", domain, ", error: ",err)
+                return
+            end
+            ngx.say("ip_info: ", require("toolkit.json").encode(ip_info))
+        }
+    }
+--- request
+GET /t
+--- error_log
+failed to parse domain: ipv6.local
+
+
+
+=== TEST 12: get_last_index
+--- config
+    location /t {
+        content_by_lua_block {
+            local string_rfind = require("pl.stringx").rfind
+            local cases = {
+                {"you are welcome", "co"},
+                {"nice to meet you", "meet"},
+                {"chicken run", "cc"},
+                {"day day up", "day"},
+                {"happy new year", "e"},
+                {"apisix__1928", "__"}
+            }
+
+            for _, case in ipairs(cases) do
+                local res = string_rfind(case[1], case[2])
+                ngx.say("res:", res)
+            end
+        }
+    }
+--- request
+GET /t
+--- response_body
+res:12
+res:9
+res:nil
+res:5
+res:12
+res:7
+
+
+
+=== TEST 13: gethostname
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            local hostname = core.utils.gethostname()
+            ngx.say("hostname: ", hostname)
+            local hostname2 = core.utils.gethostname()
+            ngx.say("hostname cached: ", hostname == hostname2)
+            ngx.say("hostname valid: ", hostname ~= "")
+
+            local handle = io.popen("/bin/hostname")
+            if handle then
+                local system_hostname = handle:read("*a")
+                handle:close()
+                if system_hostname then
+                    system_hostname = string.gsub(system_hostname, "\n$", "")
+                    ngx.say("system hostname: ", system_hostname)
+                    ngx.say("hostname match: ", hostname == system_hostname)
+                else
+                    ngx.say("system hostname: failed to read")
+                    ngx.say("hostname match: unable to verify")
+                end
+            else
+                ngx.say("system hostname: failed to execute /bin/hostname")
+                ngx.say("hostname match: unable to verify")
+            end
+        }
+    }
+--- request
+GET /t
+--- response_body_like
+hostname: .+
+hostname cached: true
+hostname valid: true
+system hostname: .+
+hostname match: true
+
+
+
+=== TEST 14: resolve_var reports how many variables it resolved
+--- config
+    location /t {
+        content_by_lua_block {
+            local resolve_var = require("apisix.core.utils").resolve_var
+            local ctx = {you = "John", me = "David", num = 42, f = false}
+            local cases = {
+                "$you and $me",
+                "${nobody}",
+                "${nobody??Rose}",
+                "${nobody??}",
+                "${ nobody ?? 0 }",
+                "$you$nobody$me",
+                "\\$me",
+                "no vars",
+                "$num",
+                "$f",
+            }
+            for _, case in ipairs(cases) do
+                local res, err, n = resolve_var(case, ctx)
+                ngx.say(case, " => ", res, " ", n, " ", tostring(err))
+            end
+        }
+    }
+--- request
+GET /t
+--- response_body
+$you and $me => John and David 2 nil
+${nobody} =>  0 nil
+${nobody??Rose} => Rose 1 nil
+${nobody??} =>  0 nil
+${ nobody ?? 0 } => 0 1 nil
+$you$nobody$me => JohnDavid 2 nil
+\$me => \$me 0 nil
+no vars => no vars 0 nil
+$num => 42 1 nil
+$f => false 1 nil
+
+
+
+=== TEST 15: resolve_var applies the escaper to every resolved value
+--- config
+    location /t {
+        content_by_lua_block {
+            local resolve_var = require("apisix.core.utils").resolve_var
+            local ctx = {sp = "x y", sl = "/"}
+            local res, err, n = resolve_var("$sp-${sl}-${none??a b}", ctx, ngx.escape_uri)
+            ngx.say(res, " ", n, " ", tostring(err))
+            res, err, n = resolve_var("$sp-$sl", ctx, function(v)
+                return v == "/" and 1 or nil
+            end)
+            ngx.say(res, " ", n, " ", tostring(err))
+        }
+    }
+--- request
+GET /t
+--- response_body
+x%20y-%2F-a%20b 3 nil
+nil-1 2 nil
+
+
+
+=== TEST 16: resolve_var reuses a template with different values on every call
+--- config
+    location /t {
+        content_by_lua_block {
+            local resolve_var = require("apisix.core.utils").resolve_var
+            local tpl = "${host}:${uri}"
+            for i = 1, 3 do
+                local res, _, n = resolve_var(tpl, {host = "h" .. i, uri = "/u" .. i})
+                ngx.say(res, " ", n)
+            end
+            local res, _, n = resolve_var(tpl, {host = "h4"})
+            ngx.say(res, " ", n)
+        }
+    }
+--- request
+GET /t
+--- response_body
+h1:/u1 2
+h2:/u2 2
+h3:/u3 2
+h4: 1
+
+
+
+=== TEST 17: a variable getter may resolve another template while it is called
+--- config
+    location /t {
+        content_by_lua_block {
+            local resolve_var = require("apisix.core.utils").resolve_var
+            local ctx = setmetatable({}, {__index = function(_, key)
+                if key == "outer" then
+                    return (resolve_var("in-$inner", {inner = "x"}))
+                end
+                if key == "b" then
+                    return "B"
+                end
+            end})
+            local res, err, n = resolve_var("$outer/$b", ctx)
+            ngx.say(res, " ", n, " ", tostring(err))
+        }
+    }
+--- request
+GET /t
+--- response_body
+in-x/B 2 nil
+
+
+
+=== TEST 18: resolve_var keeps working after a variable getter raises an error
+--- config
+    location /t {
+        content_by_lua_block {
+            local resolve_var = require("apisix.core.utils").resolve_var
+            local ctx = setmetatable({}, {__index = function(_, key)
+                if key == "boom" then
+                    error("getter failed")
+                end
+                if key == "outer" then
+                    return (resolve_var("in-$inner", {inner = "x"}))
+                end
+                return key == "b" and "B" or nil
+            end})
+            local ok = pcall(resolve_var, "keep-$b/$boom", ctx)
+            ngx.say("raised: ", not ok)
+            for _ = 1, 2 do
+                local res, err, n = resolve_var("$outer/$b", ctx)
+                ngx.say(res, " ", n, " ", tostring(err))
+            end
+        }
+    }
+--- request
+GET /t
+--- response_body
+raised: true
+in-x/B 2 nil
+in-x/B 2 nil
+
+
+
+=== TEST 19: resolve_var with no_cache resolves the template without caching it
+--- config
+    location /t {
+        content_by_lua_block {
+            local resolve_var = require("apisix.core.utils").resolve_var
+            local tpl_cache
+            for i = 1, math.huge do
+                local name, value = debug.getupvalue(resolve_var, i)
+                if not name then
+                    break
+                end
+                if name == "tpl_cache" then
+                    tpl_cache = value
+                    break
+                end
+            end
+
+            local res, err, n = resolve_var("once-$a", {a = "x"}, nil, true)
+            ngx.say(res, " ", n, " ", tostring(err))
+            ngx.say("cached: ", tpl_cache:get("once-$a") ~= nil)
+
+            res = resolve_var("kept-$a", {a = "x"})
+            ngx.say(res)
+            ngx.say("cached: ", tpl_cache:get("kept-$a") ~= nil)
+        }
+    }
+--- request
+GET /t
+--- response_body
+once-x 1 nil
+cached: false
+kept-x
+cached: true
+
+
+
+=== TEST 20: resolve_var stays correct with more templates than its cache holds
+--- config
+    location /t {
+        content_by_lua_block {
+            local resolve_var = require("apisix.core.utils").resolve_var
+            local tpl_cache
+            for i = 1, math.huge do
+                local name, value = debug.getupvalue(resolve_var, i)
+                if not name then
+                    break
+                end
+                if name == "tpl_cache" then
+                    tpl_cache = value
+                    break
+                end
+            end
+
+            -- the second pass resolves templates the first one evicted
+            local bad = 0
+            for pass = 1, 2 do
+                local ctx = {uri = "/p" .. pass}
+                for i = 1, 3000 do
+                    local res, err, n = resolve_var("/svc-" .. i .. "${uri}", ctx)
+                    if res ~= "/svc-" .. i .. "/p" .. pass or err or n ~= 1 then
+                        bad = bad + 1
+                    end
+                end
+            end
+            ngx.say("mismatches: ", bad)
+            ngx.say("first template evicted: ", tpl_cache:get("/svc-1${uri}") == nil)
+            ngx.say("last template cached: ", tpl_cache:get("/svc-3000${uri}") ~= nil)
+        }
+    }
+--- request
+GET /t
+--- response_body
+mismatches: 0
+first template evicted: true
+last template cached: true

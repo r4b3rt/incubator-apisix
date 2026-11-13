@@ -41,8 +41,6 @@ __DATA__
 GET /t
 --- response_body
 done
---- no_error_log
-[error]
 
 
 
@@ -61,11 +59,8 @@ done
     }
 --- request
 GET /t
---- response_body
-object matches none of the requireds: ["body_schema"] or ["header_schema"]
-done
---- no_error_log
-[error]
+--- response_body_like eval
+qr/object matches none of the required/
 
 
 
@@ -73,44 +68,50 @@ done
 --- config
     location /t {
         content_by_lua_block {
+            local json = require("toolkit.json")
             local t = require("lib.test_admin").test
+            local data = {
+                plugins = {
+                    ["request-validation"] = {
+                    body_schema = {
+                        type = "object",
+                        required = { "required_payload" },
+                        properties = {
+                        required_payload = {
+                            type = "string"
+                        },
+                        boolean_payload = {
+                            type = "boolean"
+                        },
+                        timeouts = {
+                            type = "integer",
+                            minimum = 1,
+                            maximum = 254,
+                            default = 3
+                        },
+                        req_headers = {
+                            type = "array",
+                            minItems = 1,
+                            items = {
+                                type = "string"
+                            }
+                        }
+                        }
+                    }
+                    }
+                },
+                upstream = {
+                    nodes = {
+                        ["127.0.0.1:1982"] = 1
+                    },
+                    type = "roundrobin"
+                },
+                uri = "/opentracing"
+            }
             local code, body = t('/apisix/admin/routes/1',
                  ngx.HTTP_PUT,
-                 [[{
-                        "plugins": {
-                            "request-validation": {
-                                "body_schema": {
-                                    "type": "object",
-                                    "required": ["required_payload"],
-                                    "properties": {
-                                        "required_payload": {"type": "string"},
-                                        "boolean_payload": {"type": "boolean"},
-                                        "timeouts": {
-                                           "type": "integer",
-                                            "minimum": 1,
-                                            "maximum": 254,
-                                            "default": 3
-                                        },
-                                        "req_headers": {
-                                            "type": "array",
-                                            "minItems": 1,
-                                            "items": {
-                                                "type": "string"
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        },]] .. [[
-                        "upstream": {
-                            "nodes": {
-                                "127.0.0.1:1982": 1
-                            },
-                            "type": "roundrobin"
-                        },
-                        "uri": "/opentracing"
-                }]]
-                )
+                 json.encode(data)
+            )
 
             if code >= 300 then
                 ngx.status = code
@@ -122,8 +123,6 @@ done
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -195,43 +194,49 @@ hello1 world
 --- config
     location /t {
         content_by_lua_block {
+            local json = require("toolkit.json")
             local t = require("lib.test_admin").test
+            local data = {
+                plugins = {
+                    ["request-validation"] = {
+                    header_schema = {
+                        type = "object",
+                        required = { "required_payload" },
+                        properties = {
+                        required_payload = {
+                            type = "string"
+                        },
+                        boolean_payload = {
+                            type = "boolean"
+                        },
+                        timeouts = {
+                            type = "integer",
+                            minimum = 1,
+                            maximum = 254,
+                            default = 3
+                        },
+                        req_headers = {
+                            type = "array",
+                            minItems = 1,
+                            items = {
+                            type = "string"
+                            }
+                        }
+                        }
+                    }
+                    }
+                },
+                upstream = {
+                    nodes = {
+                    ["127.0.0.1:1982"] = 1
+                    },
+                    type = "roundrobin"
+                },
+                uri = "/opentracing"
+            }
             local code, body = t('/apisix/admin/routes/1',
                  ngx.HTTP_PUT,
-                 [[{
-                        "plugins": {
-                            "request-validation": {
-                                "header_schema": {
-                                    "type": "object",
-                                    "required": ["required_payload"],
-                                    "properties": {
-                                        "required_payload": {"type": "string"},
-                                        "boolean_payload": {"type": "boolean"},
-                                        "timeouts": {
-                                           "type": "integer",
-                                            "minimum": 1,
-                                            "maximum": 254,
-                                            "default": 3
-                                        },
-                                        "req_headers": {
-                                            "type": "array",
-                                            "minItems": 1,
-                                            "items": {
-                                                "type": "string"
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        },]] .. [[
-                        "upstream": {
-                            "nodes": {
-                                "127.0.0.1:1982": 1
-                            },
-                            "type": "roundrobin"
-                        },
-                        "uri": "/opentracing"
-                }]]
+                 json.encode(data)
                 )
 
             if code >= 300 then
@@ -244,8 +249,6 @@ hello1 world
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -307,8 +310,6 @@ property "required_payload" is required
 GET /t
 --- response_body
 hello1 world
---- no_error_log
-[error]
 
 
 
@@ -363,10 +364,6 @@ hello1 world
 GET /t
 --- response_body
 passed
---- error_code chomp
-200
---- no_error_log
-[error]
 
 
 
@@ -403,10 +400,6 @@ passed
 GET /t
 --- response_body
 passed
---- error_code chomp
-200
---- no_error_log
-[error]
 
 
 
@@ -443,10 +436,6 @@ passed
 GET /t
 --- response_body
 passed
---- error_code chomp
-200
---- no_error_log
-[error]
 
 
 
@@ -483,10 +472,6 @@ passed
 GET /t
 --- response_body
 passed
---- error_code chomp
-200
---- no_error_log
-[error]
 
 
 
@@ -523,10 +508,6 @@ passed
 GET /t
 --- response_body
 passed
---- error_code chomp
-200
---- no_error_log
-[error]
 
 
 
@@ -563,10 +544,6 @@ passed
 GET /t
 --- response_body
 passed
---- error_code chomp
-200
---- no_error_log
-[error]
 
 
 
@@ -603,10 +580,6 @@ passed
 GET /t
 --- response_body
 passed
---- error_code chomp
-200
---- no_error_log
-[error]
 
 
 
@@ -643,10 +616,6 @@ passed
 GET /t
 --- response_body
 passed
---- error_code chomp
-200
---- no_error_log
-[error]
 
 
 
@@ -685,8 +654,6 @@ GET /t
 qr/invalid JSON type: test/
 --- error_code chomp
 400
---- no_error_log
-[error]
 
 
 
@@ -731,8 +698,6 @@ GET /t
 qr/table expected, got string/
 --- error_code chomp
 400
---- no_error_log
-[error]
 
 
 
@@ -775,10 +740,6 @@ qr/table expected, got string/
 GET /t
 --- response_body
 passed
---- error_code chomp
-200
---- no_error_log
-[error]
 
 
 
@@ -824,8 +785,6 @@ GET /t
 qr/table expected, got string/
 --- error_code chomp
 400
---- no_error_log
-[error]
 
 
 
@@ -869,10 +828,6 @@ qr/table expected, got string/
 GET /t
 --- response_body
 passed
---- error_code chomp
-200
---- no_error_log
-[error]
 
 
 
@@ -927,10 +882,6 @@ passed
 GET /t
 --- response_body
 passed
---- error_code chomp
-200
---- no_error_log
-[error]
 
 
 
@@ -967,10 +918,6 @@ passed
 GET /t
 --- response_body
 passed
---- error_code chomp
-200
---- no_error_log
-[error]
 
 
 
@@ -1007,10 +954,6 @@ passed
 GET /t
 --- response_body
 passed
---- error_code chomp
-200
---- no_error_log
-[error]
 
 
 
@@ -1047,10 +990,6 @@ passed
 GET /t
 --- response_body
 passed
---- error_code chomp
-200
---- no_error_log
-[error]
 
 
 
@@ -1087,10 +1026,6 @@ passed
 GET /t
 --- response_body
 passed
---- error_code chomp
-200
---- no_error_log
-[error]
 
 
 
@@ -1127,10 +1062,6 @@ passed
 GET /t
 --- response_body
 passed
---- error_code chomp
-200
---- no_error_log
-[error]
 
 
 
@@ -1167,10 +1098,6 @@ passed
 GET /t
 --- response_body
 passed
---- error_code chomp
-200
---- no_error_log
-[error]
 
 
 
@@ -1207,10 +1134,6 @@ passed
 GET /t
 --- response_body
 passed
---- error_code chomp
-200
---- no_error_log
-[error]
 
 
 
@@ -1249,8 +1172,6 @@ GET /t
 qr/invalid JSON type: test/
 --- error_code chomp
 400
---- no_error_log
-[error]
 
 
 
@@ -1295,8 +1216,6 @@ GET /t
 qr/table expected, got string/
 --- error_code chomp
 400
---- no_error_log
-[error]
 
 
 
@@ -1339,10 +1258,6 @@ qr/table expected, got string/
 GET /t
 --- response_body
 passed
---- error_code chomp
-200
---- no_error_log
-[error]
 
 
 
@@ -1388,8 +1303,6 @@ GET /t
 qr/table expected, got string/
 --- error_code chomp
 400
---- no_error_log
-[error]
 
 
 
@@ -1433,7 +1346,576 @@ qr/table expected, got string/
 GET /t
 --- response_body
 passed
---- error_code chomp
-200
---- no_error_log
-[error]
+
+
+
+=== TEST 35: add route (test request validation `header_schema.required` success with custom reject message)
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                    "plugins": {
+                        "request-validation": {
+                            "header_schema": {
+                                "type": "object",
+                                "properties": {
+                                    "test": {
+                                        "type": "string",
+                                        "enum": ["a", "b", "c"]
+                                    }
+                                },
+                                "required": ["test"]
+                            },
+                            "rejected_msg": "customize reject message for header_schema.required"
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1982": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uri": "/opentracing"
+                }]])
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 36: use empty header to hit `header_schema.required with custom reject message` rule
+--- request
+GET /opentracing
+--- error_code: 400
+--- response_body chomp
+customize reject message for header_schema.required
+--- error_log eval
+qr/schema validation failed/
+
+
+
+=== TEST 37: use bad header value to hit `header_schema.required with custom reject message` rule
+--- request
+GET /opentracing
+--- more_headers
+test: abc
+--- error_code: 400
+--- response_body chomp
+customize reject message for header_schema.required
+--- error_log eval
+qr/schema validation failed/
+
+
+
+=== TEST 38: pass `header_schema.required with custom reject message` rule
+--- request
+GET /opentracing
+--- more_headers
+test: a
+--- error_code: 200
+--- response_body eval
+qr/opentracing/
+
+
+
+=== TEST 39: add route (test request validation `body_schema.required` success with custom reject message)
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                    "plugins": {
+                        "request-validation": {
+                            "body_schema": {
+                                "type": "object",
+                                "properties": {
+                                    "test": {
+                                        "type": "string",
+                                        "enum": ["a", "b", "c"]
+                                    }
+                                },
+                                "required": ["test"]
+                            },
+                            "rejected_msg": "customize reject message for body_schema.required"
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1982": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uri": "/opentracing"
+                }]])
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 40: use empty body to hit `body_schema.required with custom reject message` rule
+--- request
+GET /opentracing
+--- error_code: 400
+--- response_body chomp
+customize reject message for body_schema.required
+
+
+
+=== TEST 41: use bad body value to hit `body_schema.required with custom reject message` rule
+--- request
+POST /opentracing
+{"test":"abc"}
+--- error_code: 400
+--- response_body chomp
+customize reject message for body_schema.required
+--- error_log eval
+qr/schema validation failed/
+
+
+
+=== TEST 42: pass `body_schema.required with custom reject message` rule
+--- request
+POST /opentracing
+{"test":"a"}
+--- error_code: 200
+--- response_body eval
+qr/opentracing/
+
+
+
+=== TEST 43: add route (test request validation `header_schema.required` failure with custom reject message)
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                    "plugins": {
+                        "request-validation": {
+                            "header_schema": {
+                                "type": "object",
+                                "properties": {
+                                    "test": {
+                                        "type": "string",
+                                        "enum": ["a", "b", "c"]
+                                    }
+                                },
+                                "required": ["test"]
+                            },
+                            "rejected_msg": "customize reject message customize reject message customize reject message customize reject message customize reject message customize reject message customize reject message customize reject message customize reject message customize reject message customize reject message"
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1982": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uri": "/plugin/request/validation"
+                }]])
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body_like eval
+qr/string too long/
+--- error_code: 400
+
+
+
+=== TEST 44: add route (test request validation schema with custom reject message only)
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                    "plugins": {
+                        "request-validation": {
+                            "rejected_msg": "customize reject message"
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1982": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uri": "/plugin/request/validation"
+                }]])
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body_like eval
+qr/object matches none of the required/
+--- error_code: 400
+
+
+
+=== TEST 45: add route (test request validation `body_schema.required` success with custom reject code)
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                    "plugins": {
+                        "request-validation": {
+                            "body_schema": {
+                                "type": "object",
+                                "properties": {
+                                    "test": {
+                                        "type": "string",
+                                        "enum": ["a", "b", "c"]
+                                    }
+                                },
+                                "required": ["test"]
+                            },
+                            "rejected_code": 505
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1982": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uri": "/opentracing"
+                }]])
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 46: use empty body to hit custom rejected code rule
+--- request
+GET /opentracing
+--- error_code: 505
+
+
+
+=== TEST 47: use bad body value to hit custom rejected code rule
+--- request
+POST /opentracing
+{"test":"abc"}
+--- error_code: 505
+--- error_log eval
+qr/schema validation failed/
+
+
+
+=== TEST 48: pass custom rejected code rule
+--- request
+POST /opentracing
+{"test":"a"}
+--- error_code: 200
+--- response_body eval
+qr/opentracing/
+
+
+
+=== TEST 49: add route (test request validation `header_schema.required` failure with custom reject code)
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                    "plugins": {
+                        "request-validation": {
+                            "header_schema": {
+                                "type": "object",
+                                "properties": {
+                                    "test": {
+                                        "type": "string",
+                                        "enum": ["a", "b", "c"]
+                                    }
+                                },
+                                "required": ["test"]
+                            },
+                            "rejected_code": 10000
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1982": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uri": "/plugin/request/validation"
+                }]])
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body_like eval
+qr/expected 10000 to be at most 599/
+--- error_code: 400
+
+
+
+=== TEST 50: add route (test request validation schema with custom reject code only)
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                    "plugins": {
+                        "request-validation": {
+                            "rejected_code": 505
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1982": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uri": "/plugin/request/validation"
+                }]])
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body_like eval
+qr/object matches none of the required/
+--- error_code: 400
+
+
+
+=== TEST 51: add route for urlencoded post data validation
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                    "plugins": {
+                        "request-validation": {
+                            "body_schema": {
+                                "type": "object",
+                                "required": ["required_payload"],
+                                "properties": {
+                                    "required_payload": {"type": "string"}
+                                },
+                                "rejected_msg": "customize reject message"
+                            }
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uri": "/echo"
+                }]])
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 52: test urlencoded post data
+--- more_headers
+Content-Type: application/x-www-form-urlencoded
+--- request eval
+"POST /echo
+" . "a=b&" x 101 . "required_payload=101-hello"
+--- response_body eval
+qr/101-hello/
+
+
+
+=== TEST 53: test urlencoded post data with charset and mixed-case media type
+--- more_headers
+Content-Type: Application/X-WWW-Form-Urlencoded; charset=utf-8
+--- request eval
+"POST /echo
+" . "a=b&" x 101 . "required_payload=101-hello"
+--- response_body eval
+qr/101-hello/
+
+
+
+=== TEST 54: add route for duplicated Content-Type validation
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                    "plugins": {
+                        "request-validation": {
+                            "body_schema": {
+                                "type": "object",
+                                "required": ["required_payload"],
+                                "properties": {
+                                    "required_payload": {"type": "string"}
+                                }
+                            },
+                            "rejected_code": 400,
+                            "rejected_msg": "duplicated content-type"
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uri": "/echo"
+                }]])
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 55: duplicated Content-Type header is rejected (urlencoded, json)
+--- more_headers
+Content-Type: application/x-www-form-urlencoded
+Content-Type: application/json
+--- request
+POST /echo
+{"required_payload": "hello"}
+--- error_code: 400
+--- response_body chomp
+duplicated content-type
+--- error_log
+duplicated Content-Type header
+
+
+
+=== TEST 56: duplicated Content-Type header is rejected (json, urlencoded)
+--- more_headers
+Content-Type: application/json
+Content-Type: application/x-www-form-urlencoded
+--- request
+POST /echo
+{"required_payload": "hello"}
+--- error_code: 400
+--- response_body chomp
+duplicated content-type
+--- error_log
+duplicated Content-Type header
+
+
+
+=== TEST 57: add route with a small max_req_body_size
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                    "plugins": {
+                        "request-validation": {
+                            "max_req_body_size": 10,
+                            "body_schema": {
+                                "type": "object",
+                                "required": ["required_payload"],
+                                "properties": {
+                                    "required_payload": {"type": "string"}
+                                }
+                            }
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uri": "/echo"
+                }]])
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 58: body larger than max_req_body_size is rejected
+--- more_headers
+Content-Type: application/json
+--- request
+POST /echo
+{"required_payload": "this body is well over ten bytes"}
+--- error_code: 400
+--- error_log
+request size

@@ -31,8 +31,6 @@ __DATA__
 GET /apisix/admin/schema/route
 --- response_body eval
 qr/"plugins":\{"type":"object"}/
---- no_error_log
-[error]
 
 
 
@@ -56,8 +54,6 @@ qr/"plugins":\{"type":"object"}/
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -65,8 +61,6 @@ passed
 --- request
 GET /apisix/admin/schema/noexits
 --- error_code: 400
---- no_error_log
-[error]
 
 
 
@@ -74,8 +68,6 @@ GET /apisix/admin/schema/noexits
 --- request
 PUT /apisix/admin/schema/service
 --- error_code: 404
---- no_error_log
-[error]
 
 
 
@@ -83,8 +75,6 @@ PUT /apisix/admin/schema/service
 --- request
 POST /apisix/admin/schema/service
 --- error_code: 404
---- no_error_log
-[error]
 
 
 
@@ -92,41 +82,12 @@ POST /apisix/admin/schema/service
 --- config
 location /t {
     content_by_lua_block {
+        local ssl = require("apisix.schema_def").ssl
         local t = require("lib.test_admin").test
         local code, body = t('/apisix/admin/schema/ssl',
             ngx.HTTP_GET,
             nil,
-            {
-                type = "object",
-                properties = {
-                    cert = {
-                        type = "string", minLength = 128, maxLength = 64*1024
-                    },
-                    key = {
-                        type = "string", minLength = 128, maxLength = 64*1024
-                    },
-                    sni = {
-                        type = "string",
-                        pattern = [[^\*?[0-9a-zA-Z-.]+$]],
-                    },
-                    snis = {
-                        type = "array",
-                        items = {
-                            type = "string",
-                            pattern = [[^\*?[0-9a-zA-Z-.]+$]],
-                        }
-                    },
-                    exptime = {
-                        type = "integer",
-                        minimum = 1588262400,  -- 2020/5/1 0:0:0
-                    },
-                },
-                oneOf = {
-                    {required = {"sni", "key", "cert"}},
-                    {required = {"snis", "key", "cert"}}
-                },
-                additionalProperties = false,
-            }
+            ssl
             )
 
         ngx.status = code
@@ -137,8 +98,6 @@ location /t {
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -147,17 +106,13 @@ passed
 GET /apisix/admin/schema/plugins/limit-count
 --- response_body eval
 qr/"required":\["count","time_window"\]/
---- no_error_log
-[error]
 
 
 
 === TEST 8: get not exist plugin
 --- request
 GET /apisix/admin/schema/plugins/no-exist
---- error_code: 400
---- no_error_log
-[error]
+--- error_code: 404
 
 
 
@@ -172,7 +127,7 @@ location /t {
             [[{
                 "properties": {
                     "phase": {
-                        "enum": ["rewrite", "access", "header_filter", "body_filter", "log", "balancer"],
+                        "enum": ["rewrite", "access", "header_filter", "body_filter", "log", "before_proxy"],
                         "type": "string"
                     },
                     "functions": {
@@ -196,8 +151,6 @@ location /t {
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -212,7 +165,7 @@ location /t {
             [[{
                 "properties": {
                     "phase": {
-                        "enum": ["rewrite", "access", "header_filter", "body_filter", "log", "balancer"],
+                        "enum": ["rewrite", "access", "header_filter", "body_filter", "log", "before_proxy"],
                         "type": "string"
                     },
                     "functions": {
@@ -236,8 +189,6 @@ location /t {
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -246,8 +197,6 @@ passed
 GET /apisix/admin/schema/plugins/udp-logger
 --- response_body  eval
 qr/"properties":/
---- no_error_log
-[error]
 
 
 
@@ -256,8 +205,6 @@ qr/"properties":/
 GET /apisix/admin/schema/plugins/grpc-transcode
 --- response_body eval
 qr/("proto_id".*additionalProperties|additionalProperties.*"proto_id")/
---- no_error_log
-[error]
 
 
 
@@ -266,8 +213,6 @@ qr/("proto_id".*additionalProperties|additionalProperties.*"proto_id")/
 GET /apisix/admin/schema/plugins/prometheus
 --- response_body eval
 qr/"disable":\{"type":"boolean"\}/
---- no_error_log
-[error]
 
 
 
@@ -279,8 +224,6 @@ plugins:
 GET /apisix/admin/schema/plugins/node-status
 --- response_body eval
 qr/"disable":\{"type":"boolean"\}/
---- no_error_log
-[error]
 
 
 
@@ -289,5 +232,19 @@ qr/"disable":\{"type":"boolean"\}/
 GET /apisix/admin/schema/global_rule
 --- response_body eval
 qr/("update_time":\{"type":"integer"\}.*"create_time":\{"type":"integer"\}|"create_time":\{"type":"integer"\}.*"update_time":\{"type":"integer"\})/
---- no_error_log
-[error]
+
+
+
+=== TEST 16: get proto schema to check if it contains `create_time` and `update_time`
+--- request
+GET /apisix/admin/schema/proto
+--- response_body eval
+qr/("update_time":\{"type":"integer"\}.*"create_time":\{"type":"integer"\}|"create_time":\{"type":"integer"\}.*"update_time":\{"type":"integer"\})/
+
+
+
+=== TEST 17: get stream_route schema to check if it contains `create_time` and `update_time`
+--- request
+GET /apisix/admin/schema/stream_route
+--- response_body eval
+qr/("update_time":\{"type":"integer"\}.*"create_time":\{"type":"integer"\}|"create_time":\{"type":"integer"\}.*"update_time":\{"type":"integer"\})/

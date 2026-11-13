@@ -22,11 +22,30 @@ no_long_string();
 no_shuffle();
 no_root_location();
 
+add_block_preprocessor(sub {
+    my ($block) = @_;
+
+    if (!$block->request) {
+        $block->set_value("request", "GET /t");
+    }
+
+    if (!$block->error_log && !$block->no_error_log) {
+        $block->set_value("no_error_log", "[error]\n[alert]");
+    }
+
+    my $extra_init_worker_by_lua = $block->extra_init_worker_by_lua // "";
+    $extra_init_worker_by_lua .= <<_EOC_;
+        require("lib.test_redis").flush_all()
+_EOC_
+
+    $block->set_value("extra_init_worker_by_lua", $extra_init_worker_by_lua);
+});
+
 run_tests;
 
 __DATA__
 
-=== TEST 1: set route, missing redis host
+=== TEST 1: set route, missing redis_cluster_nodes
 --- config
     location /t {
         content_by_lua_block {
@@ -59,17 +78,13 @@ __DATA__
             ngx.print(body)
         }
     }
---- request
-GET /t
 --- error_code: 400
 --- response_body
-{"error_msg":"failed to check the configuration of plugin limit-count err: failed to validate dependent schema for \"policy\": value should match only one schema, but matches none"}
---- no_error_log
-[error]
+{"error_msg":"failed to check the configuration of plugin limit-count err: else clause did not match"}
 
 
 
-=== TEST 2: set route, with redis host and port
+=== TEST 2: set route, with redis_cluster_nodes and redis_cluster_name
 --- config
     location /t {
         content_by_lua_block {
@@ -89,7 +104,8 @@ GET /t
                             "redis_cluster_nodes": [
                                 "127.0.0.1:5000",
                                 "127.0.0.1:5001"
-                            ]
+                            ],
+                            "redis_cluster_name": "redis-cluster-1"
                         }
                     },
                     "upstream": {
@@ -107,12 +123,8 @@ GET /t
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -135,7 +147,8 @@ passed
                             "redis_cluster_nodes": [
                                 "127.0.0.1:5000",
                                 "127.0.0.1:5001"
-                            ]
+                            ],
+                            "redis_cluster_name": "redis-cluster-1"
                         }
                     },
                     "upstream": {
@@ -144,35 +157,6 @@ passed
                         },
                         "type": "roundrobin"
                     }
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                                "limit-count": {
-                                    "count": 2,
-                                    "time_window": 60,
-                                    "rejected_code": 503,
-                                    "key": "remote_addr",
-                                    "policy": "redis-cluster",
-                                    "redis_timeout": 1000,
-                                    "redis_cluster_nodes": [
-                                        "127.0.0.1:5000",
-                                        "127.0.0.1:5001"
-                                    ]
-                                }
-                            },
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1980": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "uri": "/hello"
-                        },
-                        "key": "/apisix/routes/1"
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -182,23 +166,14 @@ passed
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
 === TEST 4: up the limit
 --- request
 GET /hello
---- no_error_log
-[error]
---- error_log
-try to lock with key route#1#redis-cluster
-unlock with key route#1#redis-cluster
 
 
 
@@ -206,9 +181,7 @@ unlock with key route#1#redis-cluster
 --- pipelined_requests eval
 ["GET /hello", "GET /hello", "GET /hello"]
 --- error_code eval
-[200, 503, 503]
---- no_error_log
-[error]
+[200, 200, 503]
 
 
 
@@ -216,9 +189,7 @@ unlock with key route#1#redis-cluster
 --- pipelined_requests eval
 ["GET /hello1", "GET /hello", "GET /hello2", "GET /hello", "GET /hello"]
 --- error_code eval
-[404, 503, 404, 503, 503]
---- no_error_log
-[error]
+[404, 200, 404, 200, 503]
 
 
 
@@ -235,14 +206,15 @@ unlock with key route#1#redis-cluster
                         "limit-count": {
                             "count": 9999,
                             "time_window": 60,
-                            "key": "http_x_real_ip",
+                            "key": "remote_addr",
                             "policy": "redis-cluster",
                             "redis_cluster_nodes": [
                                 "127.0.0.1:5000",
                                 "127.0.0.1:8001",
                                 "127.0.0.1:8002",
                                 "127.0.0.1:8003"
-                            ]
+                            ],
+                            "redis_cluster_name": "redis-cluster-1"
                         }
                     },
                     "upstream": {
@@ -260,12 +232,8 @@ unlock with key route#1#redis-cluster
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -281,8 +249,6 @@ passed
 
         }
     }
---- request
-GET /t
 --- response_body
 code: 200
 code: 200
@@ -304,8 +270,6 @@ code: 200
 code: 200
 code: 200
 code: 200
---- no_error_log
-[error]
 --- timeout: 10
 
 
@@ -323,13 +287,14 @@ code: 200
                         "plugins": {
                             "limit-count": {
                                 "count": ]] .. count .. [[,
-                                "time_window": 60,
-                                "key": "http_x_real_ip",
+                                "time_window": 69,
+                                "key": "remote_addr",
                                 "policy": "redis-cluster",
                                 "redis_cluster_nodes": [
                                     "127.0.0.1:5000",
                                     "127.0.0.1:5001"
-                                ]
+                                ],
+                                "redis_cluster_name": "redis-cluster-1"
                             }
                         },
                         "upstream": {
@@ -357,8 +322,6 @@ code: 200
             end
         }
     }
---- request
-GET /t
 --- response_body
 code: 200
 code: 200
@@ -370,5 +333,291 @@ code: 200
 code: 200
 code: 503
 code: 503
---- no_error_log
-[error]
+
+
+
+=== TEST 10: set route, four redis nodes, no one is valid, with enable degradation switch
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "uri": "/hello",
+                    "plugins": {
+                        "limit-count": {
+                            "count": 9999,
+                            "time_window": 60,
+                            "key": "remote_addr",
+                            "policy": "redis-cluster",
+                            "allow_degradation": true,
+                            "redis_cluster_nodes": [
+                                "127.0.0.1:8001",
+                                "127.0.0.1:8002",
+                                "127.0.0.1:8003",
+                                "127.0.0.1:8004"
+                            ],
+                            "redis_cluster_name": "redis-cluster-1"
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    }
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- response_body
+passed
+
+
+
+=== TEST 11: enable degradation switch for TEST 10
+--- request
+GET /hello
+--- response_body
+hello world
+--- error_log
+connection refused
+
+
+
+=== TEST 12: set route, use error type for redis_cluster_ssl and redis_cluster_ssl_verify
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "plugins": {
+                        "limit-count": {
+                            "count": 2,
+                            "time_window": 60,
+                            "rejected_code": 503,
+                            "key": "remote_addr",
+                            "policy": "redis-cluster",
+                            "redis_timeout": 1001,
+                            "redis_cluster_nodes": [
+                                "127.0.0.1:7000",
+                                "127.0.0.1:7001"
+                            ],
+                            "redis_cluster_name": "redis-cluster-1",
+                            "redis_cluster_ssl": "true",
+                            "redis_cluster_ssl_verify": "false"
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uri": "/hello"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.print(body)
+        }
+    }
+--- error_code: 400
+--- response_body
+{"error_msg":"failed to check the configuration of plugin limit-count err: else clause did not match"}
+
+
+
+=== TEST 13: set route, redis_cluster_ssl_verify is true(will cause ssl handshake err), with enable degradation switch
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "uri": "/hello",
+                    "plugins": {
+                        "limit-count": {
+                            "count": 2,
+                            "time_window": 60,
+                            "rejected_code": 503,
+                            "key": "remote_addr",
+                            "policy": "redis-cluster",
+                            "allow_degradation": true,
+                            "redis_timeout": 1001,
+                            "redis_cluster_nodes": [
+                                "127.0.0.1:7000",
+                                "127.0.0.1:7001"
+                            ],
+                            "redis_cluster_name": "redis-cluster-1",
+                            "redis_cluster_ssl": true,
+                            "redis_cluster_ssl_verify": true
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    }
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- response_body
+passed
+
+
+
+=== TEST 14: enable degradation switch for TEST 13
+--- request
+GET /hello
+--- response_body
+hello world
+--- error_log
+failed to do ssl handshake
+
+
+
+=== TEST 15: set route, with redis_cluster_nodes and redis_cluster_name redis_cluster_ssl and redis_cluster_ssl_verify
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "uri": "/hello",
+                    "plugins": {
+                        "limit-count": {
+                            "count": 2,
+                            "time_window": 60,
+                            "rejected_code": 503,
+                            "key": "remote_addr",
+                            "policy": "redis-cluster",
+                            "redis_timeout": 1001,
+                            "redis_cluster_nodes": [
+                                "127.0.0.1:7000",
+                                "127.0.0.1:7001"
+                            ],
+                            "redis_cluster_name": "redis-cluster-1",
+                            "redis_cluster_ssl": true,
+                            "redis_cluster_ssl_verify": false
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    }
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- response_body
+passed
+
+
+
+=== TEST 16: up the limit
+--- pipelined_requests eval
+["GET /hello", "GET /hello", "GET /hello", "GET /hello"]
+--- error_code eval
+[200, 200, 503, 503]
+
+
+
+=== TEST 17: set route and flush the cluster script cache
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "uri": "/hello",
+                    "plugins": {
+                        "limit-count": {
+                            "count": 9999,
+                            "time_window": 60,
+                            "key": "remote_addr",
+                            "policy": "redis-cluster",
+                            "redis_cluster_nodes": [
+                                "127.0.0.1:5000",
+                                "127.0.0.1:5001"
+                            ],
+                            "redis_cluster_name": "redis-cluster-1"
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    }
+                }]]
+                )
+            if code >= 300 then
+                ngx.status = code
+                ngx.say(body)
+                return
+            end
+
+            -- drop any cached script on every node so the next evalsha returns NOSCRIPT
+            local redis = require("resty.redis")
+            local seed = redis:new()
+            seed:set_timeout(1000)
+            local ok, err = seed:connect("127.0.0.1", 5000)
+            if not ok then
+                ngx.say("failed to connect seed: ", err)
+                return
+            end
+            local nodes = seed:cluster("nodes")
+            seed:set_keepalive(10000, 100)
+            for addr in nodes:gmatch("(%d+%.%d+%.%d+%.%d+:%d+)@") do
+                local ip, port = addr:match("([^:]+):(%d+)")
+                local red = redis:new()
+                red:set_timeout(1000)
+                if red:connect(ip, tonumber(port)) then
+                    red:script("flush")
+                    red:set_keepalive(10000, 100)
+                end
+            end
+            ngx.say("done")
+        }
+    }
+--- response_body
+done
+
+
+
+=== TEST 18: cluster path falls back to eval on NOSCRIPT
+--- request
+GET /hello
+--- error_code: 200
+--- grep_error_log eval
+qr/redis evalsha failed:.*Falling back to eval/
+--- grep_error_log_out
+redis evalsha failed: NOSCRIPT No matching script. Please use EVAL.. Falling back to eval

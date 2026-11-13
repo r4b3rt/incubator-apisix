@@ -37,7 +37,7 @@ __DATA__
                         "upstream": {
                             "nodes": {
                                 "127.0.0.1:1980": 1,
-                                "github.com:80": 0
+                                "www.apiseven.com:80": 0
                             },
                             "type": "roundrobin"
                         },
@@ -55,8 +55,6 @@ __DATA__
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -66,8 +64,6 @@ GET /not_found
 --- error_code: 404
 --- response_body
 {"error_msg":"404 Route Not Found"}
---- no_error_log
-[error]
 
 
 
@@ -76,10 +72,9 @@ GET /not_found
 GET /hello
 --- response_body
 hello world
---- no_error_log
-[error]
 --- error_log eval
-qr/dns resolver domain: github.com to \d+.\d+.\d+.\d+/
+qr/dns resolver domain: www.apiseven.com to \d+.\d+.\d+.\d+/
+--- timeout: 10
 
 
 
@@ -97,9 +92,9 @@ qr/dns resolver domain: github.com to \d+.\d+.\d+.\d+/
                             },
                             "type": "roundrobin",
                             "pass_host": "rewrite",
-                            "upstream_host": "httpbin.org"
+                            "upstream_host": "test.com"
                         },
-                        "uri": "/uri"
+                        "uri": "/echo"
                 }]]
                 )
 
@@ -113,18 +108,14 @@ qr/dns resolver domain: github.com to \d+.\d+.\d+.\d+/
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
 === TEST 5: hit route
 --- request
-GET /uri
---- response_body eval
-qr/host: httpbin.org/
---- no_error_log
-[error]
+GET /echo
+--- response_headers
+host: test.com
 
 
 
@@ -138,13 +129,13 @@ qr/host: httpbin.org/
                  [[{
                         "upstream": {
                             "nodes": {
-                                "httpbin.org:80": 1
+                                "test.com:1980": 1
                             },
                             "type": "roundrobin",
                             "desc": "new upstream",
                             "pass_host": "node"
                         },
-                        "uri": "/get"
+                        "uri": "/echo"
                 }]]
                 )
 
@@ -158,15 +149,64 @@ qr/host: httpbin.org/
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
 === TEST 7: hit route
 --- request
-GET /get
---- response_body eval
-qr/"Host": "httpbin.org"/
---- no_error_log
-[error]
+GET /echo
+--- response_headers
+host: test.com:1980
+
+
+
+=== TEST 8: test domain with roundrobin
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "upstream": {
+                        "nodes": {
+                            "localhost:1981": 2,
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uri": "/server_port"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 9: hit
+--- config
+location /t {
+    content_by_lua_block {
+        local t = require("lib.test_admin").test
+        local bodys = {}
+        for i = 1, 3 do
+            local _, _, body = t('/server_port', ngx.HTTP_GET)
+            bodys[i] = body
+        end
+        table.sort(bodys)
+        ngx.say(table.concat(bodys, ", "))
+    }
+}
+--- request
+GET /t
+--- response_body
+1980, 1981, 1981

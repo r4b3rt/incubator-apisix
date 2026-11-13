@@ -21,19 +21,6 @@ log_level('info');
 no_root_location();
 no_shuffle();
 
-our $yaml_config = <<_EOC_;
-apisix:
-    node_listen: 1984
-    admin_key: ~
-    dns_resolver_valid: 1
-_EOC_
-
-add_block_preprocessor(sub {
-    my ($block) = @_;
-
-    $block->set_value("yaml_config", $yaml_config);
-});
-
 run_tests();
 
 __DATA__
@@ -48,7 +35,7 @@ __DATA__
                 [[{
                     "upstream": {
                         "nodes": {
-                            "test.com:1980": 1
+                            "test1.com:1980": 1
                         },
                         "type": "roundrobin"
                     },
@@ -66,8 +53,6 @@ __DATA__
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -79,8 +64,8 @@ passed
     apisix.http_init()
 
     local utils = require("apisix.core.utils")
-    utils.dns_parse = function (domain, resolvers)  -- mock: DNS parser
-        if domain == "test.com" then
+    utils.dns_parse = function (domain)  -- mock: DNS parser
+        if domain == "test1.com" then
             return {address = "127.0.0.2"}
         end
 
@@ -90,8 +75,6 @@ passed
 GET /hello
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
@@ -104,10 +87,10 @@ hello world
 
     local utils = require("apisix.core.utils")
     local count = 0
-    utils.dns_parse = function (domain, resolvers)  -- mock: DNS parser
+    utils.dns_parse = function (domain)  -- mock: DNS parser
         count = count + 1
 
-        if domain == "test.com" then
+        if domain == "test1.com" then
             return {address = "127.0.0." .. count}
         end
 
@@ -120,33 +103,17 @@ location /t {
         local t = require("lib.test_admin").test
         core.log.info("call /hello")
         local code, body = t('/hello', ngx.HTTP_GET)
-
-        ngx.sleep(1.1)  -- cache expired
-        core.log.info("call /hello")
-        local code, body = t('/hello', ngx.HTTP_GET)
-        local code, body = t('/hello', ngx.HTTP_GET)
-
-        ngx.sleep(1.1)  -- cache expired
-        core.log.info("call /hello")
-        local code, body = t('/hello', ngx.HTTP_GET)
     }
 }
 
 --- request
 GET /t
 --- grep_error_log eval
-qr/dns resolver domain: test.com to 127.0.0.\d|call \/hello|proxy request to 127.0.0.\d:1980/
+qr/dns resolver domain: test1.com to 127.0.0.\d|call \/hello|proxy request to 127.0.0.\d:1980/
 --- grep_error_log_out
 call /hello
-dns resolver domain: test.com to 127.0.0.1
+dns resolver domain: test1.com to 127.0.0.1
 proxy request to 127.0.0.1:1980
-call /hello
-dns resolver domain: test.com to 127.0.0.2
-proxy request to 127.0.0.2:1980
-proxy request to 127.0.0.2:1980
-call /hello
-dns resolver domain: test.com to 127.0.0.3
-proxy request to 127.0.0.3:1980
 
 
 
@@ -160,7 +127,7 @@ proxy request to 127.0.0.3:1980
                 [[{
                     "upstream": {
                         "nodes": {
-                            "test.com:1980": 1,
+                            "test1.com:1980": 1,
                             "test2.com:1980": 1
                         },
                         "type": "roundrobin"
@@ -179,8 +146,6 @@ proxy request to 127.0.0.3:1980
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -192,8 +157,8 @@ passed
     apisix.http_init()
 
     local utils = require("apisix.core.utils")
-    utils.dns_parse = function (domain, resolvers)  -- mock: DNS parser
-        if domain == "test.com" or domain == "test2.com" then
+    utils.dns_parse = function (domain)  -- mock: DNS parser
+        if domain == "test1.com" or domain == "test2.com" then
             return {address = "127.0.0.2"}
         end
 
@@ -203,8 +168,6 @@ passed
 GET /hello
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
@@ -217,10 +180,10 @@ hello world
 
     local utils = require("apisix.core.utils")
     local count = 0
-    utils.dns_parse = function (domain, resolvers)  -- mock: DNS parser
+    utils.dns_parse = function (domain)  -- mock: DNS parser
         count = count + 1
 
-        if domain == "test.com" or domain == "test2.com" then
+        if domain == "test1.com" or domain == "test2.com" then
             return {address = "127.0.0." .. count}
         end
 
@@ -234,18 +197,6 @@ location /t {
         core.log.info("call /hello")
         local code, body = t('/hello', ngx.HTTP_GET)
         core.log.warn("code: ", code)
-
-        ngx.sleep(1.1)  -- cache expired
-        core.log.info("call /hello")
-        local code, body = t('/hello', ngx.HTTP_GET)
-        core.log.warn("code: ", code)
-        local code, body = t('/hello', ngx.HTTP_GET)
-        core.log.warn("code: ", code)
-
-        ngx.sleep(1.1)  -- cache expired
-        core.log.info("call /hello")
-        local code, body = t('/hello', ngx.HTTP_GET)
-        core.log.warn("code: ", code)
     }
 }
 
@@ -255,24 +206,11 @@ GET /t
 qr/dns resolver domain: \w+.com to 127.0.0.\d|call \/hello|proxy request to 127.0.0.\d:1980/
 --- grep_error_log_out eval
 qr/call \/hello(
-dns resolver domain: test.com to 127.0.0.1
+dns resolver domain: test1.com to 127.0.0.1
 dns resolver domain: test2.com to 127.0.0.2|
 dns resolver domain: test2.com to 127.0.0.1
-dns resolver domain: test.com to 127.0.0.2)
+dns resolver domain: test1.com to 127.0.0.2)
 proxy request to 127.0.0.[12]:1980
-call \/hello(
-dns resolver domain: test.com to 127.0.0.3
-dns resolver domain: test2.com to 127.0.0.4|
-dns resolver domain: test2.com to 127.0.0.3
-dns resolver domain: test.com to 127.0.0.4)
-proxy request to 127.0.0.[34]:1980
-proxy request to 127.0.0.[34]:1980
-call \/hello(
-dns resolver domain: test.com to 127.0.0.5
-dns resolver domain: test2.com to 127.0.0.6|
-dns resolver domain: test2.com to 127.0.0.5
-dns resolver domain: test.com to 127.0.0.6)
-proxy request to 127.0.0.[56]:1980
 /
 
 
@@ -286,7 +224,7 @@ proxy request to 127.0.0.[56]:1980
                  ngx.HTTP_PUT,
                  [[{
                     "nodes": {
-                        "test.com:1980": 1
+                        "test1.com:1980": 1
                     },
                     "type": "roundrobin",
                     "desc": "new upstream"
@@ -303,8 +241,6 @@ proxy request to 127.0.0.[56]:1980
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -331,8 +267,6 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -345,10 +279,10 @@ passed
 
     local utils = require("apisix.core.utils")
     local count = 0
-    utils.dns_parse = function (domain, resolvers)  -- mock: DNS parser
+    utils.dns_parse = function (domain)  -- mock: DNS parser
         count = count + 1
 
-        if domain == "test.com" then
+        if domain == "test1.com" then
             return {address = "127.0.0." .. count}
         end
 
@@ -361,33 +295,17 @@ location /t {
         local t = require("lib.test_admin").test
         core.log.info("call /hello")
         local code, body = t('/hello', ngx.HTTP_GET)
-
-        ngx.sleep(1.1)  -- cache expired
-        core.log.info("call /hello")
-        local code, body = t('/hello', ngx.HTTP_GET)
-        local code, body = t('/hello', ngx.HTTP_GET)
-
-        ngx.sleep(1.1)  -- cache expired
-        core.log.info("call /hello")
-        local code, body = t('/hello', ngx.HTTP_GET)
     }
 }
 
 --- request
 GET /t
 --- grep_error_log eval
-qr/dns resolver domain: test.com to 127.0.0.\d|call \/hello|proxy request to 127.0.0.\d:1980/
+qr/dns resolver domain: test1.com to 127.0.0.\d|call \/hello|proxy request to 127.0.0.\d:1980/
 --- grep_error_log_out
 call /hello
-dns resolver domain: test.com to 127.0.0.1
+dns resolver domain: test1.com to 127.0.0.1
 proxy request to 127.0.0.1:1980
-call /hello
-dns resolver domain: test.com to 127.0.0.2
-proxy request to 127.0.0.2:1980
-proxy request to 127.0.0.2:1980
-call /hello
-dns resolver domain: test.com to 127.0.0.3
-proxy request to 127.0.0.3:1980
 
 
 
@@ -400,7 +318,7 @@ proxy request to 127.0.0.3:1980
                  ngx.HTTP_PUT,
                  [[{
                     "nodes": {
-                        "test.com:1980": 1,
+                        "test1.com:1980": 1,
                         "test2.com:1980": 1
                     },
                     "type": "roundrobin",
@@ -418,8 +336,6 @@ proxy request to 127.0.0.3:1980
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -432,10 +348,10 @@ passed
 
     local utils = require("apisix.core.utils")
     local count = 0
-    utils.dns_parse = function (domain, resolvers)  -- mock: DNS parser
+    utils.dns_parse = function (domain)  -- mock: DNS parser
         count = count + 1
 
-        if domain == "test.com" or domain == "test2.com" then
+        if domain == "test1.com" or domain == "test2.com" then
             return {address = "127.0.0." .. count}
         end
 
@@ -448,17 +364,6 @@ location /t {
         local t = require("lib.test_admin").test
         core.log.info("call /hello")
         local code, body = t('/hello', ngx.HTTP_GET)
-
-        ngx.sleep(1.1)  -- cache expired
-        core.log.info("call /hello")
-        local code, body = t('/hello', ngx.HTTP_GET)
-        local code, body = t('/hello', ngx.HTTP_GET)
-        local code, body = t('/hello', ngx.HTTP_GET)
-        local code, body = t('/hello', ngx.HTTP_GET)
-
-        ngx.sleep(1.1)  -- cache expired
-        core.log.info("call /hello")
-        local code, body = t('/hello', ngx.HTTP_GET)
     }
 }
 
@@ -468,26 +373,11 @@ GET /t
 qr/dns resolver domain: \w+.com to 127.0.0.\d|call \/hello|proxy request to 127.0.0.\d:1980/
 --- grep_error_log_out eval
 qr/call \/hello(
-dns resolver domain: test.com to 127.0.0.1
+dns resolver domain: test1.com to 127.0.0.1
 dns resolver domain: test2.com to 127.0.0.2|
 dns resolver domain: test2.com to 127.0.0.1
-dns resolver domain: test.com to 127.0.0.2)
+dns resolver domain: test1.com to 127.0.0.2)
 proxy request to 127.0.0.[12]:1980
-call \/hello(
-dns resolver domain: test.com to 127.0.0.3
-dns resolver domain: test2.com to 127.0.0.4|
-dns resolver domain: test2.com to 127.0.0.3
-dns resolver domain: test.com to 127.0.0.4)
-proxy request to 127.0.0.[34]:1980
-proxy request to 127.0.0.[34]:1980
-proxy request to 127.0.0.[34]:1980
-proxy request to 127.0.0.[34]:1980
-call \/hello(
-dns resolver domain: test2.com to 127.0.0.5
-dns resolver domain: test.com to 127.0.0.6|
-dns resolver domain: test.com to 127.0.0.5
-dns resolver domain: test2.com to 127.0.0.6)
-proxy request to 127.0.0.[56]:1980
 /
 
 
@@ -501,8 +391,8 @@ proxy request to 127.0.0.[56]:1980
 
     local utils = require("apisix.core.utils")
     local count = 1
-    utils.dns_parse = function (domain, resolvers)  -- mock: DNS parser
-        if domain == "test.com" or domain == "test2.com" then
+    utils.dns_parse = function (domain)  -- mock: DNS parser
+        if domain == "test1.com" or domain == "test2.com" then
             return {address = "127.0.0.1"}
         end
 
@@ -515,17 +405,6 @@ location /t {
         local t = require("lib.test_admin").test
         core.log.info("call /hello")
         local code, body = t('/hello', ngx.HTTP_GET)
-
-        ngx.sleep(1.1)  -- cache expired
-        core.log.info("call /hello")
-        local code, body = t('/hello', ngx.HTTP_GET)
-        local code, body = t('/hello', ngx.HTTP_GET)
-        local code, body = t('/hello', ngx.HTTP_GET)
-        local code, body = t('/hello', ngx.HTTP_GET)
-
-        ngx.sleep(1.1)  -- cache expired
-        core.log.info("call /hello")
-        local code, body = t('/hello', ngx.HTTP_GET)
     }
 }
 
@@ -535,25 +414,10 @@ GET /t
 qr/dns resolver domain: \w+.com to 127.0.0.\d|call \/hello|proxy request to 127.0.0.\d:1980/
 --- grep_error_log_out eval
 qr/call \/hello(
-dns resolver domain: test.com to 127.0.0.1
+dns resolver domain: test1.com to 127.0.0.1
 dns resolver domain: test2.com to 127.0.0.1|
 dns resolver domain: test2.com to 127.0.0.1
-dns resolver domain: test.com to 127.0.0.1)
-proxy request to 127.0.0.1:1980
-call \/hello(
-dns resolver domain: test.com to 127.0.0.1
-dns resolver domain: test2.com to 127.0.0.1|
-dns resolver domain: test2.com to 127.0.0.1
-dns resolver domain: test.com to 127.0.0.1)
-proxy request to 127.0.0.1:1980
-proxy request to 127.0.0.1:1980
-proxy request to 127.0.0.1:1980
-proxy request to 127.0.0.1:1980
-call \/hello(
-dns resolver domain: test.com to 127.0.0.1
-dns resolver domain: test2.com to 127.0.0.1|
-dns resolver domain: test2.com to 127.0.0.1
-dns resolver domain: test.com to 127.0.0.1)
+dns resolver domain: test1.com to 127.0.0.1)
 proxy request to 127.0.0.1:1980
 /
 
@@ -568,7 +432,7 @@ proxy request to 127.0.0.1:1980
                  ngx.HTTP_PUT,
                  [[{
                     "nodes": {
-                        "test.com:1980": 1,
+                        "test1.com:1980": 1,
                         "127.0.0.5:1981": 1
                     },
                     "type": "roundrobin",
@@ -586,8 +450,6 @@ proxy request to 127.0.0.1:1980
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -600,9 +462,9 @@ passed
 
     local utils = require("apisix.core.utils")
     local count = 0
-    utils.dns_parse = function (domain, resolvers)  -- mock: DNS parser
+    utils.dns_parse = function (domain)  -- mock: DNS parser
         count = count + 1
-        if domain == "test.com" or domain == "test2.com" then
+        if domain == "test1.com" or domain == "test2.com" then
             return {address = "127.0.0." .. count}
         end
 
@@ -615,17 +477,6 @@ location /t {
         local t = require("lib.test_admin").test
         core.log.info("call /hello")
         local code, body = t('/hello', ngx.HTTP_GET)
-
-        ngx.sleep(1.1)  -- cache expired
-        core.log.info("call /hello")
-        local code, body = t('/hello', ngx.HTTP_GET)
-        local code, body = t('/hello', ngx.HTTP_GET)
-        local code, body = t('/hello', ngx.HTTP_GET)
-        local code, body = t('/hello', ngx.HTTP_GET)
-
-        ngx.sleep(1.1)  -- cache expired
-        core.log.info("call /hello")
-        local code, body = t('/hello', ngx.HTTP_GET)
     }
 }
 
@@ -635,15 +486,204 @@ GET /t
 qr/dns resolver domain: \w+.com to 127.0.0.\d|call \/hello|proxy request to 127.0.0.\d:198\d/
 --- grep_error_log_out eval
 qr/call \/hello
-dns resolver domain: test.com to 127.0.0.1
+dns resolver domain: test1.com to 127.0.0.1
 proxy request to 127.0.0.(1:1980|5:1981)
-call \/hello
-dns resolver domain: test.com to 127.0.0.2
-proxy request to 127.0.0.(2:1980|5:1981)
-proxy request to 127.0.0.(2:1980|5:1981)
-proxy request to 127.0.0.(2:1980|5:1981)
-proxy request to 127.0.0.(2:1980|5:1981)
-call \/hello
-dns resolver domain: test.com to 127.0.0.3
-proxy request to 127.0.0.(3:1980|5:1981)
 /
+
+
+
+=== TEST 15: route with upstream node, the domain's IP is changed
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "upstream": {
+                        "nodes": {
+                            "test1.com:1980": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uri": "/hello"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 16: hit
+--- init_by_lua_block
+    require "resty.core"
+    apisix = require("apisix")
+    core = require("apisix.core")
+    apisix.http_init()
+
+    local utils = require("apisix.core.utils")
+    local count = 0
+    utils.dns_parse = function (domain)  -- mock: DNS parser
+        count = count + 1
+        if domain == "test1.com" then
+            return {address = "127.0.0." .. count}
+        end
+
+        error("unknown domain: " .. domain)
+    end
+
+--- config
+location /t {
+    content_by_lua_block {
+        local t = require("lib.test_admin").test
+        t('/hello', ngx.HTTP_GET)
+        -- avoid adding more "dns_value" into the route
+        t('/hello', ngx.HTTP_GET)
+    }
+}
+
+--- request
+GET /t
+--- grep_error_log eval
+qr/parse route which contain domain: .+("dns_value":.+){3}/
+--- grep_error_log_out
+
+
+
+=== TEST 17: upstream recovers after DNS failure when DNS returns to the same IP
+--- init_by_lua_block
+    require "resty.core"
+    apisix = require("apisix")
+    core = require("apisix.core")
+    apisix.http_init()
+--- config
+location /t {
+    content_by_lua_block {
+        local t = require("lib.test_admin").test
+        local code, body = t('/apisix/admin/upstreams/1',
+             ngx.HTTP_PUT,
+             [[{
+                "nodes": {
+                    "test1.com:1980": 1
+                },
+                "type": "roundrobin",
+                "desc": "new upstream"
+            }]]
+            )
+        if code >= 300 then
+            ngx.status = code
+            ngx.say(body)
+            return
+        end
+
+        code, body = t('/apisix/admin/routes/1',
+             ngx.HTTP_PUT,
+             [[{
+                    "uri": "/hello",
+                    "upstream_id": "1"
+            }]]
+            )
+        if code >= 300 then
+            ngx.status = code
+            ngx.say(body)
+            return
+        end
+
+        local utils = require("apisix.core.utils")
+        local original_dns_parse = utils.dns_parse
+        local count = 0
+        utils.dns_parse = function (domain)
+            if domain == "test1.com" then
+                count = count + 1
+                if count == 1 or count == 3 then
+                    return {address = "127.0.0.1"}
+                end
+
+                return nil, "dns server error: 3 name error"
+            end
+
+            error("unknown domain: " .. domain)
+        end
+
+        local code1 = t('/hello', ngx.HTTP_GET)
+        local code2 = t('/hello', ngx.HTTP_GET)
+        local code3 = t('/hello', ngx.HTTP_GET)
+        utils.dns_parse = original_dns_parse
+        core.log.warn("codes: ", code1, ",", code2, ",", code3)
+        ngx.say(code1, ",", code2, ",", code3)
+    }
+}
+--- request
+GET /t
+--- response_body
+200,503,200
+--- ignore_error_log
+
+
+
+=== TEST 18: route recovers after DNS failure when DNS returns to the same IP
+--- init_by_lua_block
+    require "resty.core"
+    apisix = require("apisix")
+    core = require("apisix.core")
+    apisix.http_init()
+--- config
+location /t {
+    content_by_lua_block {
+        local t = require("lib.test_admin").test
+        local code, body = t('/apisix/admin/routes/1',
+            ngx.HTTP_PUT,
+            [[{
+                "upstream": {
+                    "nodes": {
+                        "test1.com:1980": 1
+                    },
+                    "type": "roundrobin"
+                },
+                "uri": "/hello"
+            }]]
+            )
+        if code >= 300 then
+            ngx.status = code
+            ngx.say(body)
+            return
+        end
+
+        local utils = require("apisix.core.utils")
+        local original_dns_parse = utils.dns_parse
+        local count = 0
+        utils.dns_parse = function (domain)
+            if domain == "test1.com" then
+                count = count + 1
+                if count == 1 or count == 3 then
+                    return {address = "127.0.0.1"}
+                end
+
+                return nil, "dns server error: 3 name error"
+            end
+
+            error("unknown domain: " .. domain)
+        end
+
+        local code1 = t('/hello', ngx.HTTP_GET)
+        local code2 = t('/hello', ngx.HTTP_GET)
+        local code3 = t('/hello', ngx.HTTP_GET)
+        utils.dns_parse = original_dns_parse
+        core.log.warn("codes: ", code1, ",", code2, ",", code3)
+        ngx.say(code1, ",", code2, ",", code3)
+    }
+}
+--- request
+GET /t
+--- response_body
+200,503,200
+--- ignore_error_log

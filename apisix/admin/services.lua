@@ -16,43 +16,20 @@
 --
 local core = require("apisix.core")
 local get_routes = require("apisix.router").http_routes
+local get_stream_routes = require("apisix.router").stream_routes
+local apisix_upstream = require("apisix.upstream")
+local resource = require("apisix.admin.resource")
 local schema_plugin = require("apisix.admin.plugins").check_schema
-local upstreams = require("apisix.admin.upstreams")
-local utils = require("apisix.admin.utils")
+local plugins_encrypt_conf = require("apisix.admin.plugins").encrypt_conf
 local tostring = tostring
 local ipairs = ipairs
 local type = type
 local loadstring = loadstring
 
 
-local _M = {
-    version = 0.3,
-}
-
-
-local function check_conf(id, conf, need_id)
-    if not conf then
-        return nil, {error_msg = "missing configurations"}
-    end
-
-    id = id or conf.id
-    if need_id and not id then
-        return nil, {error_msg = "missing service id"}
-    end
-
-    if not need_id and id then
-        return nil, {error_msg = "wrong service id, do not need it"}
-    end
-
-    if need_id and conf.id and tostring(conf.id) ~= tostring(id) then
-        return nil, {error_msg = "wrong service id"}
-    end
-
-    conf.id = id
-
-    core.log.info("schema: ", core.json.delay_encode(core.schema.service))
-    core.log.info("conf  : ", core.json.delay_encode(conf))
-    local ok, err = core.schema.check(core.schema.service, conf)
+local function check_conf(id, conf, need_id, schema, opts)
+    opts = opts or {}
+    local ok, err = core.schema.check(schema, conf)
     if not ok then
         return nil, {error_msg = "invalid configuration: " .. err}
     end
@@ -63,14 +40,14 @@ local function check_conf(id, conf, need_id)
 
     local upstream_conf = conf.upstream
     if upstream_conf then
-        local ok, err = upstreams.check_upstream_conf(upstream_conf)
+        local ok, err = apisix_upstream.check_upstream_conf(upstream_conf)
         if not ok then
             return nil, {error_msg = err}
         end
     end
 
     local upstream_id = conf.upstream_id
-    if upstream_id then
+    if upstream_id and not opts.skip_references_check then
         local key = "/upstreams/" .. upstream_id
         local res, err = core.etcd.get(key)
         if not res then
@@ -105,73 +82,11 @@ local function check_conf(id, conf, need_id)
         end
     end
 
-    return need_id and id or true
+    return true
 end
 
 
-function _M.put(id, conf)
-    local id, err = check_conf(id, conf, true)
-    if not id then
-        return 400, err
-    end
-
-    local key = "/services/" .. id
-    core.log.info("key: ", key)
-
-    local ok, err = utils.inject_conf_with_prev_conf("service", key, conf)
-    if not ok then
-        return 500, {error_msg = err}
-    end
-
-    local res, err = core.etcd.set(key, conf)
-    if not res then
-        core.log.error("failed to put service[", key, "]: ", err)
-        return 500, {error_msg = err}
-    end
-
-    return res.status, res.body
-end
-
-
-function _M.get(id)
-    local key = "/services"
-    if id then
-        key = key .. "/" .. id
-    end
-
-    local res, err = core.etcd.get(key, not id)
-    if not res then
-        core.log.error("failed to get service[", key, "]: ", err)
-        return 500, {error_msg = err}
-    end
-
-    return res.status, res.body
-end
-
-
-function _M.post(id, conf)
-    local id, err = check_conf(id, conf, false)
-    if not id then
-        return 400, err
-    end
-
-    local key = "/services"
-    utils.inject_timestamp(conf)
-    local res, err = core.etcd.push(key, conf)
-    if not res then
-        core.log.error("failed to post service[", key, "]: ", err)
-        return 500, {error_msg = err}
-    end
-
-    return res.status, res.body
-end
-
-
-function _M.delete(id)
-    if not id then
-        return 400, {error_msg = "missing service id"}
-    end
-
+local function delete_checker(id)
     local routes, routes_ver = get_routes()
     core.log.info("routes: ", core.json.delay_encode(routes, true))
     core.log.info("routes_ver: ", routes_ver)
@@ -187,74 +102,120 @@ function _M.delete(id)
         end
     end
 
-    local key = "/services/" .. id
-    local res, err = core.etcd.delete(key)
-    if not res then
-        core.log.error("failed to delete service[", key, "]: ", err)
-        return 500, {error_msg = err}
+    local stream_routes, stream_routes_ver = get_stream_routes()
+    core.log.info("stream_routes: ", core.json.delay_encode(stream_routes, true))
+    core.log.info("stream_routes_ver: ", stream_routes_ver)
+    if stream_routes_ver and stream_routes then
+        for _, route in ipairs(stream_routes) do
+            if type(route) == "table" and route.value
+               and route.value.service_id
+               and tostring(route.value.service_id) == id then
+                return 400, {error_msg = "can not delete this service directly,"
+                                         .. " stream_route [" .. route.value.id
+                                         .. "] is still using it now"}
+            end
+        end
     end
 
-    return res.status, res.body
+    return nil, nil
 end
 
 
-function _M.patch(id, conf, sub_path)
-    if not id then
-        return 400, {error_msg = "missing service id"}
-    end
+local function encrypt_conf(id, conf)
+    apisix_upstream.encrypt_conf(conf.upstream)
+    plugins_encrypt_conf(conf.plugins)
+end
 
-    if not conf then
-        return 400, {error_msg = "missing new configuration"}
-    end
 
-    if not sub_path or sub_path == "" then
-        if type(conf) ~= "table"  then
-            return 400, {error_msg = "invalid configuration"}
-        end
-    end
+local base_delete = resource.delete
+local base_put    = resource.put
 
-    local key = "/services" .. "/" .. id
-    local res_old, err = core.etcd.get(key)
-    if not res_old then
-        core.log.error("failed to get service[", key, "]: ", err)
-        return 500, {error_msg = err}
-    end
 
-    if res_old.status ~= 200 then
-        return res_old.status, res_old.body
-    end
-    core.log.info("key: ", key, " old value: ",
-                  core.json.delay_encode(res_old, true))
-
-    local node_value = res_old.body.node.value
-    local modified_index = res_old.body.node.modifiedIndex
-
-    if sub_path and sub_path ~= "" then
-        local code, err, node_val = core.table.patch(node_value, sub_path, conf)
-        node_value = node_val
-        if code then
-            return code, err
-        end
-    else
-        node_value = core.table.merge(node_value, conf);
-    end
-
-    utils.inject_timestamp(node_value, nil, conf)
-
-    core.log.info("new value ", core.json.delay_encode(node_value, true))
-
-    local id, err = check_conf(id, node_value, true)
-    if not id then
-        return 400, err
-    end
-
-    local res, err = core.etcd.atomic_set(key, node_value, nil, modified_index)
+-- Creating a service under an id that was deleted earlier must not inherit the
+-- cost model of its namesake: the delete path reclaims decorations only after the
+-- service delete commits, so an rmdir that failed there leaves them behind, and
+-- delete-then-recreate is exactly what declarative pipelines do. Reclaiming on
+-- create makes that leftover inert for good.
+--
+-- Whether this is a create has to be decided before the write, but the reclaim
+-- itself must happen after it: base_put still validates, so reclaiming first
+-- would let a PUT that ends in 400 destroy the decorations on its way out.
+local function service_absent(id)
+    local res, err = core.etcd.get("/services/" .. id, false)
     if not res then
-        core.log.error("failed to set new service[", key, "]: ", err)
-        return 500, {error_msg = err}
+        return nil, {error_msg = err}
     end
 
-    return res.status, res.body
+    return res.status == 404
+end
+
+
+local function reclaim_stale_decorations(id)
+    local res, err = core.etcd.rmdir("/services/" .. id .. "/graphql_cost_decorations/")
+    if not res then
+        core.log.error("failed to reclaim the stale graphql cost decorations of ",
+                       "service [", id, "]: ", err)
+    end
+end
+
+local _M = resource.new({
+    name = "services",
+    kind = "service",
+    schema = core.schema.service,
+    checker = check_conf,
+    encrypt_conf = encrypt_conf,
+    delete_checker = delete_checker,
+})
+
+
+function _M:put(id, conf, sub_path, args)
+    local was_absent
+    if id then
+        local err
+        was_absent, err = service_absent(id)
+        if was_absent == nil then
+            return 503, err
+        end
+    end
+
+    local code, body = base_put(self, id, conf, sub_path, args)
+
+    -- etcd answers 201 when the key was created, 200 when it was replaced
+    if was_absent and code and code < 300 then
+        reclaim_stale_decorations(id)
+    end
+
+    return code, body
+end
+
+
+function _M:delete(id, conf, sub_path, uri_args)
+    local code, body = base_delete(self, id, conf, sub_path, uri_args)
+
+    -- Reclaim the graphql cost decorations owned by the service: they live under
+    -- their own etcd prefix, so etcd will not cascade for us.
+    --
+    -- Deliberately after the service is gone, and deliberately not fatal. The two
+    -- prefixes cannot be deleted in one transaction, so one of the two orders has
+    -- to lose:
+    --   * reclaim first  -- a delete rejected afterwards (delete_checker races a
+    --     route that starts referencing the service) leaves a *live* service with
+    --     no cost model, silently charging 1 per query;
+    --   * reclaim after  -- a failure here leaves decorations behind for a service
+    --     that no longer exists. Nothing can route to it, so they are inert; they
+    --     only resurface if the same service id is recreated, in which case
+    --     inheriting the model is as often right as wrong.
+    -- Losing configuration under a service that keeps serving traffic is the worse
+    -- of the two, so the orphan is the accepted one.
+    if code and code < 300 and id then
+        local res, err = core.etcd.rmdir("/services/" .. id .. "/graphql_cost_decorations/")
+        if not res then
+            core.log.error("failed to delete the graphql cost decorations of service [",
+                           id, "]: ", err)
+        end
+    end
+
+    return code, body
 end
 
 

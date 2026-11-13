@@ -27,48 +27,71 @@ add_block_preprocessor(sub {
     my $yaml_config = $block->yaml_config // <<_EOC_;
 apisix:
     node_listen: 1984
-    config_center: yaml
     enable_admin: false
-    enable_debug: true
+deployment:
+    role: data_plane
+    role_data_plane:
+        config_provider: yaml
 _EOC_
 
     $block->set_value("yaml_config", $yaml_config);
 
-    my $routes = <<_EOC_;
+    if (!$block->apisix_yaml) {
+        my $routes = <<_EOC_;
 routes:
-  -
-    uri: /hello
+  - uri: /hello
+    plugins:
+      ip-restriction:
+        whitelist:
+          - "127.0.0.1"
     upstream:
-        nodes:
-            "127.0.0.1:1980": 1
-        type: roundrobin
+      nodes:
+        "127.0.0.1:1980": 1
+      type: roundrobin
 #END
 _EOC_
 
-    $block->set_value("apisix_yaml", $block->apisix_yaml . $routes);
-
-    if (!$block->no_error_log) {
-        $block->set_value("no_error_log", "[error]");
+        $block->set_value("apisix_yaml", $block->extra_apisix_yaml . $routes);
     }
 });
 
+our $debug_config = t::APISIX::read_file("conf/debug.yaml");
+$debug_config =~ s/basic:\n  enable: false/basic:\n  enable: true/;
+
 run_tests();
+
+## TODO: extra_apisix_yaml is specific to this document and is not standard behavior for
+##       the APISIX testing framework, so it should be standardized or replaced later.
 
 __DATA__
 
 === TEST 1: sanity
---- apisix_yaml
+--- extra_apisix_yaml
 plugins:
   - name: ip-restriction
   - name: jwt-auth
   - name: mqtt-proxy
     stream: true
+--- debug_config eval: $::debug_config
+--- config
+    location /t {
+        content_by_lua_block {
+            ngx.sleep(0.3)
+            local http = require "resty.http"
+            local httpc = http.new()
+            local uri = "http://127.0.0.1:" .. ngx.var.server_port .. "/hello"
+            local res, err = httpc:request_uri(uri, {
+                    method = "GET",
+                })
+            ngx.print(res.body)
+        }
+    }
 --- request
-GET /hello
+GET /t
 --- response_body
 hello world
 --- error_log
-use config_center: yaml
+use config_provider: yaml
 load(): loaded plugin and sort by priority: 3000 name: ip-restriction
 load(): loaded plugin and sort by priority: 2510 name: jwt-auth
 load_stream(): loaded stream plugin and sort by priority: 1000 name: mqtt-proxy
@@ -77,54 +100,79 @@ qr/load\(\): new plugins/
 --- grep_error_log_out
 load(): new plugins
 load(): new plugins
+load(): new plugins
+load(): new plugins
 
 
 
-=== TEST 2: plugins not changed
+=== TEST 2: plugins not changed, but still need to reload
 --- yaml_config
 apisix:
     node_listen: 1984
-    config_center: yaml
     enable_admin: false
-    enable_debug: true
+deployment:
+    role: data_plane
+    role_data_plane:
+        config_provider: yaml
 plugins:
     - ip-restriction
     - jwt-auth
 stream_plugins:
     - mqtt-proxy
---- apisix_yaml
+--- extra_apisix_yaml
 plugins:
   - name: ip-restriction
   - name: jwt-auth
   - name: mqtt-proxy
     stream: true
+--- debug_config eval: $::debug_config
+--- config
+    location /t {
+        content_by_lua_block {
+            ngx.sleep(0.3)
+            local http = require "resty.http"
+            local httpc = http.new()
+            local uri = "http://127.0.0.1:" .. ngx.var.server_port .. "/hello"
+            local res, err = httpc:request_uri(uri, {
+                    method = "GET",
+                })
+            ngx.print(res.body)
+        }
+    }
 --- request
-GET /hello
+GET /t
 --- response_body
 hello world
---- error_log
-load(): loaded plugin and sort by priority: 3000 name: ip-restriction
-load(): loaded plugin and sort by priority: 2510 name: jwt-auth
-load_stream(): loaded stream plugin and sort by priority: 1000 name: mqtt-proxy
-load(): plugins not changed
-load_stream(): plugins not changed
+--- grep_error_log eval
+qr/loaded plugin and sort by priority: \d+ name: [^,]+/
+--- grep_error_log_out eval
+qr/(loaded plugin and sort by priority: (3000 name: ip-restriction|2510 name: jwt-auth)
+){4}/
 
 
 
 === TEST 3: disable plugin and its router
---- apisix_yaml
+--- extra_apisix_yaml
 plugins:
   - name: jwt-auth
 --- request
 GET /apisix/prometheus/metrics
 --- error_code: 404
+--- error_log
+err:unknown plugin [ip-restriction]
 
 
 
 === TEST 4: enable plugin and its router
 --- apisix_yaml
+routes:
+  - uri: /apisix/prometheus/metrics
+    plugins:
+        public-api: {}
 plugins:
+  - name: public-api
   - name: prometheus
+#END
 --- request
 GET /apisix/prometheus/metrics
 
@@ -134,14 +182,17 @@ GET /apisix/prometheus/metrics
 --- yaml_config
 apisix:
     node_listen: 1984
-    config_center: yaml
     enable_admin: false
+deployment:
+    role: data_plane
+    role_data_plane:
+        config_provider: yaml
 plugins:
     - ip-restriction
     - jwt-auth
 stream_plugins:
     - mqtt-proxy
---- apisix_yaml
+--- extra_apisix_yaml
 plugins:
   - name: xxx
     stream: ip-restriction
@@ -153,3 +204,65 @@ hello world
 property "stream" validation failed: wrong type: expected boolean, got string
 --- no_error_log
 load(): plugins not changed
+
+
+
+=== TEST 6: empty plugin list
+--- extra_apisix_yaml
+plugins:
+stream_plugins:
+--- debug_config eval: $::debug_config
+--- config
+    location /t {
+        content_by_lua_block {
+            ngx.sleep(0.3)
+            local http = require "resty.http"
+            local httpc = http.new()
+            local uri = "http://127.0.0.1:" .. ngx.var.server_port .. "/hello"
+            local res, err = httpc:request_uri(uri, {
+                    method = "GET",
+                })
+            ngx.print(res.body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+{"error_msg":"404 Route Not Found"}
+--- error_log
+use config_provider: yaml
+load(): new plugins: {}
+load_stream(): new plugins: {}
+
+
+
+=== TEST 7: route with plugin not in plugins list
+--- yaml_config
+apisix:
+    node_listen: 1984
+    enable_admin: false
+deployment:
+    role: data_plane
+    role_data_plane:
+        config_provider: yaml
+plugins:
+--- debug_config eval: $::debug_config
+--- config
+    location /t {
+        content_by_lua_block {
+            ngx.sleep(0.3)
+            local http = require "resty.http"
+            local httpc = http.new()
+            local uri = "http://127.0.0.1:" .. ngx.var.server_port .. "/hello"
+            local res, err = httpc:request_uri(uri, {
+                    method = "GET",
+                })
+            ngx.print(res.body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+{"error_msg":"404 Route Not Found"}
+--- error_log
+failed to check item data of [routes] err:unknown plugin [ip-restriction]

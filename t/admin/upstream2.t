@@ -61,15 +61,19 @@ __DATA__
             end
 
             res = json.decode(res)
-            res.node.key = nil
-            res.node.value.create_time = nil
-            res.node.value.update_time = nil
+            assert(res.key ~= nil)
+            res.key = nil
+            assert(res.value.create_time ~= nil)
+            res.value.create_time = nil
+            assert(res.value.update_time ~= nil)
+            res.value.update_time = nil
+            assert(res.value.id ~= nil)
+            res.value.id = nil
             ngx.say(json.encode(res))
         }
     }
 --- response_body
-{"action":"create","node":{"value":{"hash_on":"vars","nodes":{"127.0.0.1:8080":1},"pass_host":"pass","type":"roundrobin"}}}
-
+{"value":{"nodes":{"127.0.0.1:8080":1},"type":"roundrobin"}}
 
 
 
@@ -79,15 +83,15 @@ __DATA__
         content_by_lua_block {
             local json = require("toolkit.json")
             local t = require("lib.test_admin").test
-            local code, message, res = t('/apisix/admin/upstreams/1',
-                 ngx.HTTP_PUT,
-                 [[{
+            local code, message, res = t('/apisix/admin/upstreams/unwanted',
+                ngx.HTTP_PUT,
+                [[{
                     "nodes": {
                         "127.0.0.1:8080": 1
                     },
                     "type": "roundrobin"
                 }]]
-                )
+            )
 
             if code >= 300 then
                 ngx.status = code
@@ -96,14 +100,15 @@ __DATA__
             end
 
             res = json.decode(res)
-            res.node.value.create_time = nil
-            res.node.value.update_time = nil
+            assert(res.value.create_time ~= nil)
+            res.value.create_time = nil
+            assert(res.value.update_time ~= nil)
+            res.value.update_time = nil
             ngx.say(json.encode(res))
         }
     }
 --- response_body
-{"action":"set","node":{"key":"/apisix/upstreams/1","value":{"hash_on":"vars","id":"1","nodes":{"127.0.0.1:8080":1},"pass_host":"pass","type":"roundrobin"}}}
-
+{"key":"/apisix/upstreams/unwanted","value":{"id":"unwanted","nodes":{"127.0.0.1:8080":1},"type":"roundrobin"}}
 
 
 
@@ -113,15 +118,15 @@ __DATA__
         content_by_lua_block {
             local json = require("toolkit.json")
             local t = require("lib.test_admin").test
-            local code, message, res = t('/apisix/admin/upstreams/1',
-                 ngx.HTTP_PATCH,
-                 [[{
+            local code, message, res = t('/apisix/admin/upstreams/unwanted',
+                ngx.HTTP_PATCH,
+                [[{
                     "nodes": {
                         "127.0.0.1:8080": 1
                     },
                     "type": "roundrobin"
                 }]]
-                )
+            )
 
             if code >= 300 then
                 ngx.status = code
@@ -130,13 +135,15 @@ __DATA__
             end
 
             res = json.decode(res)
-            res.node.value.create_time = nil
-            res.node.value.update_time = nil
+            assert(res.value.create_time ~= nil)
+            res.value.create_time = nil
+            assert(res.value.update_time ~= nil)
+            res.value.update_time = nil
             ngx.say(json.encode(res))
         }
     }
 --- response_body
-{"action":"compareAndSwap","node":{"key":"/apisix/upstreams/1","value":{"hash_on":"vars","id":"1","nodes":{"127.0.0.1:8080":1},"pass_host":"pass","type":"roundrobin"}}}
+{"key":"/apisix/upstreams/unwanted","value":{"id":"unwanted","nodes":{"127.0.0.1:8080":1},"type":"roundrobin"}}
 
 
 
@@ -146,9 +153,7 @@ __DATA__
         content_by_lua_block {
             local json = require("toolkit.json")
             local t = require("lib.test_admin").test
-            local code, message, res = t('/apisix/admin/upstreams/1',
-                 ngx.HTTP_GET
-                )
+            local code, message, res = t('/apisix/admin/upstreams/unwanted', ngx.HTTP_GET)
 
             if code >= 300 then
                 ngx.status = code
@@ -157,13 +162,19 @@ __DATA__
             end
 
             res = json.decode(res)
-            res.node.value.create_time = nil
-            res.node.value.update_time = nil
+            assert(res.createdIndex ~= nil)
+            res.createdIndex = nil
+            assert(res.modifiedIndex ~= nil)
+            res.modifiedIndex = nil
+            assert(res.value.create_time ~= nil)
+            res.value.create_time = nil
+            assert(res.value.update_time ~= nil)
+            res.value.update_time = nil
             ngx.say(json.encode(res))
         }
     }
 --- response_body
-{"action":"get","count":"1","node":{"key":"/apisix/upstreams/1","value":{"hash_on":"vars","id":"1","nodes":{"127.0.0.1:8080":1},"pass_host":"pass","type":"roundrobin"}}}
+{"key":"/apisix/upstreams/unwanted","value":{"id":"unwanted","nodes":{"127.0.0.1:8080":1},"type":"roundrobin"}}
 
 
 
@@ -173,9 +184,7 @@ __DATA__
         content_by_lua_block {
             local json = require("toolkit.json")
             local t = require("lib.test_admin").test
-            local code, message, res = t('/apisix/admin/upstreams/1',
-                 ngx.HTTP_DELETE
-                )
+            local code, message, res = t('/apisix/admin/upstreams/unwanted', ngx.HTTP_DELETE)
 
             if code >= 300 then
                 ngx.status = code
@@ -188,7 +197,7 @@ __DATA__
         }
     }
 --- response_body
-{"action":"delete","deleted":"1","key":"/apisix/upstreams/1","node":{}}
+{"deleted":"1","key":"/apisix/upstreams/unwanted"}
 
 
 
@@ -199,12 +208,12 @@ __DATA__
             local core = require("apisix.core")
             local t = require("lib.test_admin").test
             local code, message = t('/apisix/admin/upstreams/1',
-                 ngx.HTTP_PUT,
-                 [[{
+                ngx.HTTP_PUT,
+                [[{
                     "nodes": {},
                     "type": "roundrobin"
                 }]]
-                )
+            )
 
             if code >= 300 then
                 ngx.status = code
@@ -233,7 +242,7 @@ passed
                     "upstream_id": "1",
                     "uri": "/index.html"
                 }]]
-                )
+            )
 
             if code >= 300 then
                 ngx.status = code
@@ -248,9 +257,39 @@ passed
 passed
 
 
+
 === TEST 8: hit empty nodes upstream
 --- request
 GET /index.html
---- error_code: 502
+--- error_code: 503
 --- error_log
 no valid upstream node
+
+
+
+=== TEST 9: upstream timeouts equal to zero
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/upstreams/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "nodes": {
+                        "127.0.0.1:8080": 1
+                    },
+                    "type": "roundrobin",
+                    "timeout": {
+                        "connect": 0,
+                        "send": 0,
+                        "read": 0
+                    }
+                }]]
+            )
+            ngx.status = code
+            ngx.print(body)
+        }
+    }
+--- error_code: 400
+--- response_body_like eval
+qr/{"error_msg":"invalid configuration: property \\\"timeout\\\" validation failed: property \\\"(connect|send|read)\\\" validation failed: expected 0 to be greater than 0"}/

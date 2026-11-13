@@ -57,9 +57,7 @@ __DATA__
 --- request
 GET /t
 --- response_body
-{"whitelist":["10.255.254.0/24","192.168.0.0/16"]}
---- no_error_log
-[error]
+{"message":"Your IP address is not allowed","response_code":403,"whitelist":["10.255.254.0/24","192.168.0.0/16"]}
 
 
 
@@ -86,9 +84,7 @@ GET /t
 --- request
 GET /t
 --- response_body_like eval
-qr/value should match only one schema, but matches none/
---- no_error_log
-[error]
+qr/failed to validate item 1: object matches none of the required/
 
 
 
@@ -115,9 +111,7 @@ qr/value should match only one schema, but matches none/
 --- request
 GET /t
 --- response_body_like eval
-qr/value should match only one schema, but matches none/
---- no_error_log
-[error]
+qr/failed to validate item 1: object matches none of the required/
 
 
 
@@ -140,8 +134,6 @@ GET /t
 --- response_body
 value should match only one schema, but matches none
 done
---- no_error_log
-[error]
 
 
 
@@ -161,11 +153,8 @@ done
     }
 --- request
 GET /t
---- response_body
-value should match only one schema, but matches none
-done
---- no_error_log
-[error]
+--- response_body_like eval
+qr/expect array to have at least 1 items/
 
 
 
@@ -185,10 +174,8 @@ done
 --- request
 GET /t
 --- response_body
-value should match only one schema, but matches none
+value should match only one schema, but matches both schemas 1 and 2
 done
---- no_error_log
-[error]
 
 
 
@@ -228,8 +215,6 @@ done
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -238,8 +223,6 @@ passed
 GET /hello
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
@@ -253,8 +236,6 @@ X-Forwarded-For: 113.74.26.106
 GET /hello
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
@@ -271,12 +252,10 @@ GET /hello
 {"message":"Your IP address is not allowed"}
 --- error_log
 ip-restriction exits with http status code 403
---- no_error_log
-[error]
 
 
 
-=== TEST 11: hit route and IPv6 not not in the whitelist
+=== TEST 11: hit route and IPv6 not in the whitelist
 --- http_config
 set_real_ip_from 127.0.0.1;
 real_ip_header X-Forwarded-For;
@@ -287,8 +266,6 @@ GET /hello
 --- error_code: 403
 --- response_body
 {"message":"Your IP address is not allowed"}
---- no_error_log
-[error]
 
 
 
@@ -328,8 +305,6 @@ GET /hello
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -339,8 +314,6 @@ GET /hello
 --- error_code: 403
 --- response_body
 {"message":"Your IP address is not allowed"}
---- no_error_log
-[error]
 
 
 
@@ -355,12 +328,10 @@ GET /hello
 --- error_code: 403
 --- response_body
 {"message":"Your IP address is not allowed"}
---- no_error_log
-[error]
 
 
 
-=== TEST 15: hit route and ip not not in the blacklist
+=== TEST 15: hit route and ip not in the blacklist
 --- http_config
 set_real_ip_from 127.0.0.1;
 real_ip_header X-Forwarded-For;
@@ -370,12 +341,10 @@ X-Forwarded-For: 114.114.114.114
 GET /hello
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
-=== TEST 16: hit route and IPv6 not not in the blacklist
+=== TEST 16: hit route and IPv6 not in the blacklist
 --- http_config
 set_real_ip_from 127.0.0.1;
 real_ip_header X-Forwarded-For;
@@ -385,8 +354,6 @@ X-Forwarded-For: 2001:db8::2
 GET /hello
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
@@ -420,8 +387,6 @@ hello world
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -430,8 +395,6 @@ passed
 GET /hello
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
@@ -459,8 +422,6 @@ hello world
 GET /t
 --- response_body
 pass
---- no_error_log
-[error]
 
 
 
@@ -500,8 +461,6 @@ pass
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -510,8 +469,6 @@ passed
 GET /hello
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
@@ -526,8 +483,6 @@ GET /hello
 --- error_code: 403
 --- response_body
 {"message":"Your IP address is not allowed"}
---- no_error_log
-[error]
 
 
 
@@ -542,8 +497,6 @@ GET /hello
 --- error_code: 403
 --- response_body
 {"message":"Your IP address is not allowed"}
---- no_error_log
-[error]
 
 
 
@@ -567,11 +520,8 @@ GET /hello
     }
 --- request
 GET /t
---- response_body
-invalid ip address: ::1/129
-value should match only one schema, but matches none
---- no_error_log
-[error]
+--- response_body_like eval
+qr/failed to validate item 1: object matches none of the required/
 
 
 
@@ -589,7 +539,9 @@ value should match only one schema, but matches none
                             "blacklist": [
                                 "127.0.0.0/24"
                             ],
-                            "disable": true
+                            "_meta": {
+                                "disable": true
+                            }
                         }
                     }
                 }]]
@@ -605,5 +557,291 @@ value should match only one schema, but matches none
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
+
+
+
+=== TEST 26: set blacklist and user-defined message
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "uri": "/hello",
+                        "upstream": {
+                            "type": "roundrobin",
+                            "nodes": {
+                                "127.0.0.1:1980": 1
+                            }
+                        },
+                        "plugins": {
+                            "ip-restriction": {
+                                 "blacklist": [
+                                     "127.0.0.0/24",
+                                     "113.74.26.106"
+                                 ],
+                                 "message": "Do you want to do something bad?"
+                            }
+                        }
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 27: hit route and ip cidr in the blacklist
+--- request
+GET /hello
+--- error_code: 403
+--- response_body
+{"message":"Do you want to do something bad?"}
+
+
+
+=== TEST 28: hit route and ip in the blacklist
+--- http_config
+set_real_ip_from 127.0.0.1;
+real_ip_header X-Forwarded-For;
+--- more_headers
+X-Forwarded-For: 113.74.26.106
+--- request
+GET /hello
+--- error_code: 403
+--- response_body
+{"message":"Do you want to do something bad?"}
+
+
+
+=== TEST 29: set whitelist and user-defined message
+--- config
+location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "uri": "/hello",
+                        "upstream": {
+                            "type": "roundrobin",
+                            "nodes": {
+                                "127.0.0.1:1980": 1
+                            }
+                        },
+                        "plugins": {
+                            "ip-restriction": {
+                                 "whitelist": [
+                                     "127.0.0.0/24",
+                                     "113.74.26.106"
+                                 ],
+                                 "message": "Do you want to do something bad?"
+                            }
+                        }
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 30: hit route and ip not in the whitelist
+--- http_config
+set_real_ip_from 127.0.0.1;
+real_ip_header X-Forwarded-For;
+--- more_headers
+X-Forwarded-For: 114.114.114.114
+--- request
+GET /hello
+--- error_code: 403
+--- response_body
+{"message":"Do you want to do something bad?"}
+--- error_log
+ip-restriction exits with http status code 403
+
+
+
+=== TEST 31: message that do not reach the minimum range
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "uri": "/hello",
+                        "upstream": {
+                            "type": "roundrobin",
+                            "nodes": {
+                                "127.0.0.1:1980": 1
+                            }
+                        },
+                        "plugins": {
+                            "ip-restriction": {
+                                 "whitelist": [
+                                     "127.0.0.0/24",
+                                     "113.74.26.106"
+                                 ],
+                                 "message": ""
+                            }
+                        }
+                }]]
+                )
+
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body_like eval
+qr/string too short, expected at least 1, got 0/
+
+
+
+=== TEST 32: exceeds the maximum limit of message
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local json = require("toolkit.json")
+
+            local data = {
+                uri = "/hello",
+                upstream = {
+                    type = "roundrobin",
+                    nodes = {
+                        ["127.0.0.1:1980"] = 1,
+                    }
+                },
+                plugins = {
+                    ["ip-restriction"] = {
+                        ["whitelist"] = {
+                            "127.0.0.0/24",
+                            "113.74.26.106"
+                        },
+                        message = ("-1Aa#"):rep(205)
+                    }
+                }
+            }
+
+            local code, body = t('/apisix/admin/routes/1',
+                ngx.HTTP_PUT,
+                json.encode(data)
+            )
+
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body_like eval
+qr/string too long, expected at most 1024, got 1025/
+
+
+
+=== TEST 33: set whitelist and 404 response code
+--- config
+location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "uri": "/hello",
+                        "upstream": {
+                            "type": "roundrobin",
+                            "nodes": {
+                                "127.0.0.1:1980": 1
+                            }
+                        },
+                        "plugins": {
+                            "ip-restriction": {
+                                 "whitelist": [
+                                     "127.0.0.0/24",
+                                     "113.74.26.106"
+                                 ],
+                                 "response_code": 404
+                            }
+                        }
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 34: hit route and ip not in the whitelist expect 404
+--- http_config
+set_real_ip_from 127.0.0.1;
+real_ip_header X-Forwarded-For;
+--- more_headers
+X-Forwarded-For: 114.114.114.114
+--- request
+GET /hello
+--- error_code: 404
+--- error_log
+ip-restriction exits with http status code 404
+
+
+
+=== TEST 35: set wrong response code
+--- config
+location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "uri": "/hello",
+                        "upstream": {
+                            "type": "roundrobin",
+                            "nodes": {
+                                "127.0.0.1:1980": 1
+                            }
+                        },
+                        "plugins": {
+                            "ip-restriction": {
+                                 "whitelist": [
+                                     "127.0.0.0/24",
+                                     "113.74.26.106"
+                                 ],
+                                 "response_code": 409
+                            }
+                        }
+                }]]
+                )
+
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body_like eval
+qr/property \\"response_code\\" validation failed: expected 409 to be at most 404/

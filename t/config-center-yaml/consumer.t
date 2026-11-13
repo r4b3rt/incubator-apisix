@@ -27,29 +27,13 @@ add_block_preprocessor(sub {
     my $yaml_config = $block->yaml_config // <<_EOC_;
 apisix:
     node_listen: 1984
-    config_center: yaml
-    enable_admin: false
-    enable_debug: true
+deployment:
+    role: data_plane
+    role_data_plane:
+        config_provider: yaml
 _EOC_
 
     $block->set_value("yaml_config", $yaml_config);
-
-    my $routes = <<_EOC_;
-routes:
-  -
-    uri: /hello
-    upstream:
-        nodes:
-            "127.0.0.1:1980": 1
-        type: roundrobin
-#END
-_EOC_
-
-    $block->set_value("apisix_yaml", $block->apisix_yaml . $routes);
-
-    if (!$block->error_log && !$block->no_error_log) {
-        $block->set_value("no_error_log", "[error]");
-    }
 });
 
 run_tests();
@@ -59,7 +43,13 @@ __DATA__
 === TEST 1: validate consumer
 --- apisix_yaml
 consumers:
-  - username: jwt-auth
+  - username: jwt&auth
+routes:
+  - uri: /hello
+    upstream:
+      nodes:
+        "127.0.0.1:1980": 1
+      type: roundrobin
 #END
 --- request
 GET /hello
@@ -70,31 +60,29 @@ property "username" validation failed
 
 
 
-=== TEST 2: validate the plugin under consumer
+=== TEST 2: consumer restriction
 --- apisix_yaml
 consumers:
-  - username: jwt
+  - username: jack
     plugins:
-        jwt-auth:
-            secret: my-secret-key
-#END
---- request
-GET /apisix/plugin/jwt/sign?key=user-key
---- error_log
-plugin jwt-auth err: property "key" is required
---- error_code: 404
-
-
-
-=== TEST 3: provide default value for the plugin
---- apisix_yaml
-consumers:
-  - username: jwt
-    plugins:
-        jwt-auth:
+        key-auth:
             key: user-key
-            secret: my-secret-key
+routes:
+    - id: 1
+      methods:
+          - POST
+      uri: "/hello"
+      plugins:
+          key-auth:
+          consumer-restriction:
+              whitelist:
+                  - jack
+      upstream:
+          type: roundrobin
+          nodes:
+              "127.0.0.1:1980": 1
 #END
+--- more_headers
+apikey: user-key
 --- request
-GET /apisix/plugin/jwt/sign?key=user-key
---- error_code: 200
+POST /hello

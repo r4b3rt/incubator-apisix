@@ -31,8 +31,8 @@ __DATA__
         content_by_lua_block {
             local plugin = require("apisix.plugins.consumer-restriction")
             local conf = {
-		title = "whitelist",
-		whitelist = {
+        title = "whitelist",
+        whitelist = {
                     "jack1",
                     "jack2"
                 }
@@ -49,17 +49,15 @@ __DATA__
 GET /t
 --- response_body
 {"rejected_code":403,"title":"whitelist","type":"consumer_name","whitelist":["jack1","jack2"]}
---- no_error_log
-[error]
 
 
 
-=== TEST 2: whitelist and blacklist mutual exclusive
+=== TEST 2: blacklist > whitelist > allowed_by_methods
 --- config
     location /t {
         content_by_lua_block {
             local plugin = require("apisix.plugins.consumer-restriction")
-            local ok, err = plugin.check_schema({whitelist={"jack1"}, blacklist={"jack2"}})
+            local ok, err = plugin.check_schema({whitelist={"jack1"}, blacklist={"jack2"}, allowed_by_methods={}})
             if not ok then
                 ngx.say(err)
             end
@@ -70,10 +68,7 @@ GET /t
 --- request
 GET /t
 --- response_body
-value should match only one schema, but matches both schemas 1 and 2
 done
---- no_error_log
-[error]
 
 
 
@@ -92,24 +87,11 @@ done
                             "password": "123456"
                         }
                     }
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "username": "jack1",
-                            "plugins": {
-                                "basic-auth": {
-                                    "username": "jack2019",
-                                    "password": "123456"
-                                }
-                            }
-                        }
-                    },
-                    "action": "set"
                 }]]
                 )
-
-            ngx.status = code
+            if code >= 300 then
+                ngx.status = code
+            end
             ngx.say(body)
         }
     }
@@ -117,8 +99,6 @@ done
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -137,24 +117,11 @@ passed
                             "password": "123456"
                         }
                     }
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "username": "jack2",
-                            "plugins": {
-                                "basic-auth": {
-                                    "username": "jack2020",
-                                    "password": "123456"
-                                }
-                            }
-                        }
-                    },
-                    "action": "set"
                 }]]
                 )
-
-            ngx.status = code
+            if code >= 300 then
+                ngx.status = code
+            end
             ngx.say(body)
         }
     }
@@ -162,8 +129,6 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -203,8 +168,6 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -214,8 +177,6 @@ GET /hello
 --- error_code: 401
 --- response_body
 {"message":"Missing authorization in request"}
---- no_error_log
-[error]
 
 
 
@@ -226,8 +187,6 @@ GET /hello
 Authorization: Basic amFjazIwMTk6MTIzNDU2
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
@@ -239,8 +198,6 @@ Authorization: Basic amFjazIwMjA6MTIzNDU2
 --- error_code: 403
 --- response_body
 {"message":"The consumer_name is forbidden."}
---- no_error_log
-[error]
 
 
 
@@ -264,7 +221,8 @@ Authorization: Basic amFjazIwMjA6MTIzNDU2
                             "consumer-restriction": {
                                  "blacklist": [
                                      "jack1"
-                                 ]
+                                 ],
+                                 "rejected_msg": "request is forbidden"
                             }
                         }
                 }]]
@@ -280,8 +238,6 @@ Authorization: Basic amFjazIwMjA6MTIzNDU2
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -291,8 +247,6 @@ GET /hello
 --- error_code: 401
 --- response_body
 {"message":"Missing authorization in request"}
---- no_error_log
-[error]
 
 
 
@@ -303,9 +257,7 @@ GET /hello
 Authorization: Basic amFjazIwMTk6MTIzNDU2
 --- error_code: 403
 --- response_body
-{"message":"The consumer_name is forbidden."}
---- no_error_log
-[error]
+{"message":"request is forbidden"}
 
 
 
@@ -316,8 +268,6 @@ GET /hello
 Authorization: Basic amFjazIwMjA6MTIzNDU2
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
@@ -356,8 +306,6 @@ hello world
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -366,9 +314,7 @@ passed
 GET /hello
 --- error_code: 401
 --- response_body
-{"message":"Missing authentication or identity verification."}
---- no_error_log
-[error]
+{"message":"The request is rejected, please check the consumer_name for this request"}
 
 
 
@@ -379,9 +325,7 @@ GET /hello
 Authorization: Basic amFjazIwMTk6MTIzNDU2
 --- error_code: 401
 --- response_body
-{"message":"Missing authentication or identity verification."}
---- no_error_log
-[error]
+{"message":"The request is rejected, please check the consumer_name for this request"}
 
 
 
@@ -392,9 +336,7 @@ GET /hello
 Authorization: Basic amFjazIwMjA6MTIzNDU2
 --- error_code: 401
 --- response_body
-{"message":"Missing authentication or identity verification."}
---- no_error_log
-[error]
+{"message":"The request is rejected, please check the consumer_name for this request"}
 
 
 
@@ -433,8 +375,6 @@ Authorization: Basic amFjazIwMjA6MTIzNDU2
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -443,9 +383,7 @@ passed
 GET /hello
 --- error_code: 401
 --- response_body
-{"message":"Missing authentication or identity verification."}
---- no_error_log
-[error]
+{"message":"The request is rejected, please check the consumer_name for this request"}
 
 
 
@@ -456,9 +394,7 @@ GET /hello
 Authorization: Basic amFjazIwMTk6MTIzNDU2
 --- error_code: 401
 --- response_body
-{"message":"Missing authentication or identity verification."}
---- no_error_log
-[error]
+{"message":"The request is rejected, please check the consumer_name for this request"}
 
 
 
@@ -469,13 +405,238 @@ GET /hello
 Authorization: Basic amFjazIwMjA6MTIzNDU2
 --- error_code: 401
 --- response_body
-{"message":"Missing authentication or identity verification."}
---- no_error_log
-[error]
+{"message":"The request is rejected, please check the consumer_name for this request"}
 
 
 
-=== TEST 21: remove consumer-restriction
+=== TEST 21: set allowed_by_methods
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "uri": "/hello",
+                        "upstream": {
+                            "type": "roundrobin",
+                            "nodes": {
+                                "127.0.0.1:1980": 1
+                            }
+                        },
+                        "plugins": {
+                            "basic-auth": {},
+                            "consumer-restriction": {
+                                 "allowed_by_methods":[{
+                                    "user":"jack1",
+                                    "methods":["POST"]
+                                 }]
+                            }
+                        }
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 22: verify jack1
+--- request
+GET /hello
+--- more_headers
+Authorization: Basic amFjazIwMTk6MTIzNDU2
+--- error_code: 403
+--- response_body
+{"message":"The consumer_name is forbidden."}
+
+
+
+=== TEST 23: set allowed_by_methods
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "uri": "/hello",
+                        "upstream": {
+                            "type": "roundrobin",
+                            "nodes": {
+                                "127.0.0.1:1980": 1
+                            }
+                        },
+                        "plugins": {
+                            "basic-auth": {},
+                            "consumer-restriction": {
+                                 "allowed_by_methods":[{
+                                    "user": "jack1",
+                                    "methods": ["POST","GET"]
+                                }]
+                            }
+                        }
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 24: verify jack1
+--- request
+GET /hello
+--- more_headers
+Authorization: Basic amFjazIwMTk6MTIzNDU2
+--- response_body
+hello world
+
+
+
+=== TEST 25: test blacklist priority
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "uri": "/hello",
+                        "upstream": {
+                            "type": "roundrobin",
+                            "nodes": {
+                                "127.0.0.1:1980": 1
+                            }
+                        },
+                        "plugins": {
+                            "basic-auth": {},
+                            "consumer-restriction": {
+                                 "blacklist": [
+                                     "jack1"
+                                 ],
+                                 "allowed_by_methods":[{
+                                    "user": "jack1",
+                                    "methods": ["POST","GET"]
+                                }]
+                            }
+                        }
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 26: verify jack1
+--- request
+GET /hello
+--- more_headers
+Authorization: Basic amFjazIwMTk6MTIzNDU2
+--- error_code: 403
+--- response_body
+{"message":"The consumer_name is forbidden."}
+
+
+
+=== TEST 27: verify jack2
+--- request
+GET /hello
+--- more_headers
+Authorization: Basic amFjazIwMjA6MTIzNDU2
+--- response_body
+hello world
+
+
+
+=== TEST 28: whitelist blacklist priority
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "uri": "/hello",
+                        "upstream": {
+                            "type": "roundrobin",
+                            "nodes": {
+                                "127.0.0.1:1980": 1
+                            }
+                        },
+                        "plugins": {
+                            "basic-auth": {},
+                            "consumer-restriction": {
+                                 "whitelist": ["jack1"],
+                                 "allowed_by_methods":[{
+                                    "user":"jack1",
+                                    "methods":["POST"]
+                                }]
+                            }
+                        }
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 29: verify jack1
+--- request
+GET /hello
+--- more_headers
+Authorization: Basic amFjazIwMTk6MTIzNDU2
+--- response_body
+hello world
+
+
+
+=== TEST 30: verify jack2
+--- request
+GET /hello
+--- more_headers
+Authorization: Basic amFjazIwMjA6MTIzNDU2
+--- error_code: 403
+--- response_body
+{"message":"The consumer_name is forbidden."}
+
+
+
+=== TEST 31: remove consumer-restriction
 --- config
     location /t {
         content_by_lua_block {
@@ -505,46 +666,38 @@ Authorization: Basic amFjazIwMjA6MTIzNDU2
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 22: verify jack1
+=== TEST 32: verify jack1
 --- request
 GET /hello
 --- more_headers
 Authorization: Basic amFjazIwMTk6MTIzNDU2
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
-=== TEST 23: verify jack2
+=== TEST 33: verify jack2
 --- request
 GET /hello
 --- more_headers
 Authorization: Basic amFjazIwMjA6MTIzNDU2
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
-=== TEST 24: verify unauthorized
+=== TEST 34: verify unauthorized
 --- request
 GET /hello
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
-=== TEST 25: create service (id:1)
+=== TEST 35: create service (id:1)
 --- config
     location /t {
         content_by_lua_block {
@@ -559,25 +712,11 @@ hello world
                         "type": "roundrobin"
                     },
                     "desc": "new service 001"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1980": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "desc": "new service 001"
-                        },
-                        "key": "/apisix/services/1"
-                    },
-                    "action": "set"
                 }]]
                 )
-
-            ngx.status = code
+            if code >= 300 then
+                ngx.status = code
+            end
             ngx.say(body)
         }
     }
@@ -585,12 +724,10 @@ hello world
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 26: add consumer with plugin hmac-auth and consumer-restriction, and set whitelist
+=== TEST 36: add consumer with plugin hmac-auth and consumer-restriction, and set whitelist
 --- config
     location /t {
         content_by_lua_block {
@@ -601,7 +738,7 @@ passed
                     "username": "jack",
                     "plugins": {
                         "hmac-auth": {
-                            "access_key": "my-access-key",
+                            "key_id": "my-access-key",
                             "secret_key": "my-secret-key"
                         },
                         "consumer-restriction": {
@@ -610,31 +747,11 @@ passed
                             "rejected_code": 401
                         }
                     }
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "username": "jack",
-                            "plugins": {
-                                "hmac-auth": {
-                                    "access_key": "my-access-key",
-                                    "secret_key": "my-secret-key",
-                                    "algorithm": "hmac-sha256",
-                                    "clock_skew": 0
-                                },
-                                "consumer-restriction": {
-                                    "type": "service_id",
-                                    "whitelist": [ "1" ],
-                                    "rejected_code": 401
-                                }
-                            }
-                        }
-                    },
-                    "action": "set"
                 }]]
                 )
-
-            ngx.status = code
+            if code >= 300 then
+                ngx.status = code
+            end
             ngx.say(body)
         }
     }
@@ -642,12 +759,10 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 27: Route binding `hmac-auth` plug-in and whitelist `service_id`
+=== TEST 37: Route binding `hmac-auth` plug-in and whitelist `service_id`
 --- config
     location /t {
         content_by_lua_block {
@@ -668,28 +783,6 @@ passed
                         "hmac-auth": {}
                     }
 
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "methods": [
-                                "GET"
-                            ],
-                            "uri": "/hello",
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1980": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "service_id": 1,
-                            "plugins": {
-                                "hmac-auth": {}
-                            }
-                        },
-                        "key": "/apisix/routes/1"
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -701,12 +794,10 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 28: verify: valid whitelist `service_id`
+=== TEST 38: verify: valid whitelist `service_id`
 --- config
 location /t {
     content_by_lua_block {
@@ -720,29 +811,24 @@ location /t {
         local secret_key = "my-secret-key"
         local timestamp = ngx_time()
         local gmt = ngx_http_time(timestamp)
-        local access_key = "my-access-key"
+        local key_id = "my-access-key"
         local custom_header_a = "asld$%dfasf"
         local custom_header_b = "23879fmsldfk"
 
         local signing_string = {
-            "GET",
-            "/hello",
-            "",
-            access_key,
-            gmt,
-            "x-custom-header-a:" .. custom_header_a,
-            "x-custom-header-b:" .. custom_header_b
+            key_id,
+            "GET /hello",
+            "date: " .. gmt,
+            "x-custom-header-a: " .. custom_header_a,
+            "x-custom-header-b: " .. custom_header_b
         }
         signing_string = core.table.concat(signing_string, "\n") .. "\n"
 
         local signature = hmac:new(secret_key, hmac.ALGOS.SHA256):final(signing_string)
         core.log.info("signature:", ngx_encode_base64(signature))
         local headers = {}
-        headers["X-HMAC-SIGNATURE"] = ngx_encode_base64(signature)
-        headers["X-HMAC-ALGORITHM"] = "hmac-sha256"
         headers["Date"] = gmt
-        headers["X-HMAC-ACCESS-KEY"] = access_key
-        headers["X-HMAC-SIGNED-HEADERS"] = "x-custom-header-a;x-custom-header-b"
+        headers["Authorization"] = "Signature keyId=\"" .. key_id .. "\",algorithm=\"hmac-sha256\"" .. ",headers=\"@request-target date x-custom-header-a x-custom-header-b\",signature=\"" .. ngx_encode_base64(signature) .. "\""
         headers["x-custom-header-a"] = custom_header_a
         headers["x-custom-header-b"] = custom_header_b
 
@@ -761,12 +847,10 @@ location /t {
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 29: create service (id:2)
+=== TEST 39: create service (id:2)
 --- config
     location /t {
         content_by_lua_block {
@@ -781,25 +865,11 @@ passed
                         "type": "roundrobin"
                     },
                     "desc": "new service 002"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1980": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "desc": "new service 002"
-                        },
-                        "key": "/apisix/services/2"
-                    },
-                    "action": "set"
                 }]]
                 )
-
-            ngx.status = code
+            if code >= 300 then
+                ngx.status = code
+            end
             ngx.say(body)
         }
     }
@@ -807,12 +877,10 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 30: Route binding `hmac-auth` plug-in and invalid whitelist `service_id`
+=== TEST 40: Route binding `hmac-auth` plug-in and invalid whitelist `service_id`
 --- config
     location /t {
         content_by_lua_block {
@@ -833,28 +901,6 @@ passed
                         "hmac-auth": {}
                     }
 
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "methods": [
-                                "GET"
-                            ],
-                            "uri": "/hello",
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1980": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "service_id": 2,
-                            "plugins": {
-                                "hmac-auth": {}
-                            }
-                        },
-                        "key": "/apisix/routes/1"
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -866,12 +912,10 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 31: verify: invalid whitelist `service_id`
+=== TEST 41: verify: invalid whitelist `service_id`
 --- config
 location /t {
     content_by_lua_block {
@@ -885,29 +929,24 @@ location /t {
         local secret_key = "my-secret-key"
         local timestamp = ngx_time()
         local gmt = ngx_http_time(timestamp)
-        local access_key = "my-access-key"
+        local key_id = "my-access-key"
         local custom_header_a = "asld$%dfasf"
         local custom_header_b = "23879fmsldfk"
 
         local signing_string = {
-            "GET",
-            "/hello",
-            "",
-            access_key,
-            gmt,
-            "x-custom-header-a:" .. custom_header_a,
-            "x-custom-header-b:" .. custom_header_b
+            key_id,
+            "GET /hello",
+            "date: " .. gmt,
+            "x-custom-header-a: " .. custom_header_a,
+            "x-custom-header-b: " .. custom_header_b
         }
         signing_string = core.table.concat(signing_string, "\n") .. "\n"
 
         local signature = hmac:new(secret_key, hmac.ALGOS.SHA256):final(signing_string)
         core.log.info("signature:", ngx_encode_base64(signature))
         local headers = {}
-        headers["X-HMAC-SIGNATURE"] = ngx_encode_base64(signature)
-        headers["X-HMAC-ALGORITHM"] = "hmac-sha256"
         headers["Date"] = gmt
-        headers["X-HMAC-ACCESS-KEY"] = access_key
-        headers["X-HMAC-SIGNED-HEADERS"] = "x-custom-header-a;x-custom-header-b"
+        headers["Authorization"] = "Signature keyId=\"" .. key_id .. "\",algorithm=\"hmac-sha256\"" .. ",headers=\"@request-target date x-custom-header-a x-custom-header-b\",signature=\"" .. ngx_encode_base64(signature) .. "\""
         headers["x-custom-header-a"] = custom_header_a
         headers["x-custom-header-b"] = custom_header_b
 
@@ -929,12 +968,10 @@ GET /t
 --- error_code: 401
 --- response_body eval
 qr/\{"message":"The service_id is forbidden."\}/
---- no_error_log
-[error]
 
 
 
-=== TEST 32: add consumer with plugin hmac-auth and consumer-restriction, and set blacklist
+=== TEST 42: add consumer with plugin hmac-auth and consumer-restriction, and set blacklist
 --- config
     location /t {
         content_by_lua_block {
@@ -945,7 +982,7 @@ qr/\{"message":"The service_id is forbidden."\}/
                     "username": "jack",
                     "plugins": {
                         "hmac-auth": {
-                            "access_key": "my-access-key",
+                            "key_id": "my-access-key",
                             "secret_key": "my-secret-key"
                         },
                         "consumer-restriction": {
@@ -954,27 +991,6 @@ qr/\{"message":"The service_id is forbidden."\}/
                             "rejected_code": 401
                         }
                     }
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "username": "jack",
-                            "plugins": {
-                                "hmac-auth": {
-                                    "access_key": "my-access-key",
-                                    "secret_key": "my-secret-key",
-                                    "algorithm": "hmac-sha256",
-                                    "clock_skew": 0
-                                },
-                                "consumer-restriction": {
-                                    "type": "service_id",
-                                    "blacklist": [ "1" ],
-                                    "rejected_code": 401
-                                }
-                            }
-                        }
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -986,12 +1002,10 @@ qr/\{"message":"The service_id is forbidden."\}/
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 33: Route binding `hmac-auth` plug-in and blacklist `service_id`
+=== TEST 43: Route binding `hmac-auth` plug-in and blacklist `service_id`
 --- config
     location /t {
         content_by_lua_block {
@@ -1012,28 +1026,6 @@ passed
                         "hmac-auth": {}
                     }
 
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "methods": [
-                                "GET"
-                            ],
-                            "uri": "/hello",
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1980": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "service_id": 1,
-                            "plugins": {
-                                "hmac-auth": {}
-                            }
-                        },
-                        "key": "/apisix/routes/1"
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -1045,12 +1037,10 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 34: verify: valid blacklist `service_id`
+=== TEST 44: verify: valid blacklist `service_id`
 --- config
 location /t {
     content_by_lua_block {
@@ -1064,29 +1054,24 @@ location /t {
         local secret_key = "my-secret-key"
         local timestamp = ngx_time()
         local gmt = ngx_http_time(timestamp)
-        local access_key = "my-access-key"
+        local key_id = "my-access-key"
         local custom_header_a = "asld$%dfasf"
         local custom_header_b = "23879fmsldfk"
 
         local signing_string = {
-            "GET",
-            "/hello",
-            "",
-            access_key,
-            gmt,
-            "x-custom-header-a:" .. custom_header_a,
-            "x-custom-header-b:" .. custom_header_b
+            key_id,
+            "GET /hello",
+            "date: " .. gmt,
+            "x-custom-header-a: " .. custom_header_a,
+            "x-custom-header-b: " .. custom_header_b
         }
         signing_string = core.table.concat(signing_string, "\n") .. "\n"
 
         local signature = hmac:new(secret_key, hmac.ALGOS.SHA256):final(signing_string)
         core.log.info("signature:", ngx_encode_base64(signature))
         local headers = {}
-        headers["X-HMAC-SIGNATURE"] = ngx_encode_base64(signature)
-        headers["X-HMAC-ALGORITHM"] = "hmac-sha256"
         headers["Date"] = gmt
-        headers["X-HMAC-ACCESS-KEY"] = access_key
-        headers["X-HMAC-SIGNED-HEADERS"] = "x-custom-header-a;x-custom-header-b"
+        headers["Authorization"] = "Signature keyId=\"" .. key_id .. "\",algorithm=\"hmac-sha256\"" .. ",headers=\"@request-target date x-custom-header-a x-custom-header-b\",signature=\"" .. ngx_encode_base64(signature) .. "\""
         headers["x-custom-header-a"] = custom_header_a
         headers["x-custom-header-b"] = custom_header_b
 
@@ -1106,12 +1091,10 @@ GET /t
 --- error_code: 401
 --- response_body eval
 qr/\{"message":"The service_id is forbidden."\}/
---- no_error_log
-[error]
 
 
 
-=== TEST 35: Route binding `hmac-auth` plug-in and invalid blacklist `service_id`
+=== TEST 45: Route binding `hmac-auth` plug-in and invalid blacklist `service_id`
 --- config
     location /t {
         content_by_lua_block {
@@ -1132,28 +1115,6 @@ qr/\{"message":"The service_id is forbidden."\}/
                         "hmac-auth": {}
                     }
 
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "methods": [
-                                "GET"
-                            ],
-                            "uri": "/hello",
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1980": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "service_id": 2,
-                            "plugins": {
-                                "hmac-auth": {}
-                            }
-                        },
-                        "key": "/apisix/routes/1"
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -1165,12 +1126,10 @@ qr/\{"message":"The service_id is forbidden."\}/
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 36: verify: invalid blacklist `service_id`
+=== TEST 46: verify: invalid blacklist `service_id`
 --- config
 location /t {
     content_by_lua_block {
@@ -1184,29 +1143,24 @@ location /t {
         local secret_key = "my-secret-key"
         local timestamp = ngx_time()
         local gmt = ngx_http_time(timestamp)
-        local access_key = "my-access-key"
+        local key_id = "my-access-key"
         local custom_header_a = "asld$%dfasf"
         local custom_header_b = "23879fmsldfk"
 
         local signing_string = {
-            "GET",
-            "/hello",
-            "",
-            access_key,
-            gmt,
-            "x-custom-header-a:" .. custom_header_a,
-            "x-custom-header-b:" .. custom_header_b
+            key_id,
+            "GET /hello",
+            "date: " .. gmt,
+            "x-custom-header-a: " .. custom_header_a,
+            "x-custom-header-b: " .. custom_header_b
         }
         signing_string = core.table.concat(signing_string, "\n") .. "\n"
 
         local signature = hmac:new(secret_key, hmac.ALGOS.SHA256):final(signing_string)
         core.log.info("signature:", ngx_encode_base64(signature))
         local headers = {}
-        headers["X-HMAC-SIGNATURE"] = ngx_encode_base64(signature)
-        headers["X-HMAC-ALGORITHM"] = "hmac-sha256"
         headers["Date"] = gmt
-        headers["X-HMAC-ACCESS-KEY"] = access_key
-        headers["X-HMAC-SIGNED-HEADERS"] = "x-custom-header-a;x-custom-header-b"
+        headers["Authorization"] = "Signature keyId=\"" .. key_id .. "\",algorithm=\"hmac-sha256\"" .. ",headers=\"@request-target date x-custom-header-a x-custom-header-b\",signature=\"" .. ngx_encode_base64(signature) .. "\""
         headers["x-custom-header-a"] = custom_header_a
         headers["x-custom-header-b"] = custom_header_b
 
@@ -1225,12 +1179,183 @@ location /t {
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 37: delete: route (id: 1)
+=== TEST 47: update consumer with plugin hmac-auth and consumer-restriction, and set whitelist
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/consumers',
+                ngx.HTTP_PUT,
+                [[{
+                    "username": "jack",
+                    "plugins": {
+                        "hmac-auth": {
+                            "key_id": "my-access-key",
+                            "secret_key": "my-secret-key"
+                        },
+                        "consumer-restriction": {
+                            "type": "route_id",
+                            "whitelist": [ "1" ],
+                            "rejected_code": 401
+                        }
+                    }
+                }]]
+                )
+
+            ngx.status = code
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 48: verify: valid whitelist `route_id`
+--- config
+location /t {
+    content_by_lua_block {
+        local ngx_time = ngx.time()
+        local ngx_http_time = ngx.http_time
+        local core = require("apisix.core")
+        local t = require("lib.test_admin")
+        local hmac = require("resty.hmac")
+        local ngx_encode_base64 = ngx.encode_base64
+        local secret_key = "my-secret-key"
+        local gmt = ngx_http_time(ngx_time)
+        local key_id = "my-access-key"
+        local custom_header_a = "asld$%dfasf"
+        local custom_header_b = "23879fmsldfk"
+
+        local signing_string = {
+            key_id,
+            "GET /hello",
+            "date: " .. gmt,
+            "x-custom-header-a: " .. custom_header_a,
+            "x-custom-header-b: " .. custom_header_b
+        }
+        signing_string = core.table.concat(signing_string, "\n") .. "\n"
+
+        local signature = hmac:new(secret_key, hmac.ALGOS.SHA256):final(signing_string)
+        core.log.info("signature:", ngx_encode_base64(signature))
+        local headers = {}
+        headers["Date"] = gmt
+        headers["Authorization"] = "Signature keyId=\"" .. key_id .. "\",algorithm=\"hmac-sha256\"" .. ",headers=\"@request-target date x-custom-header-a x-custom-header-b\",signature=\"" .. ngx_encode_base64(signature) .. "\""
+        headers["x-custom-header-a"] = custom_header_a
+        headers["x-custom-header-b"] = custom_header_b
+
+        local code, body = t.test('/hello',
+            ngx.HTTP_GET,
+            "",
+            nil,
+            headers
+        )
+
+        ngx.status = code
+        ngx.say(body)
+    }
+}
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 49: update consumer with plugin hmac-auth and consumer-restriction, and set blacklist
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/consumers',
+                ngx.HTTP_PUT,
+                [[{
+                    "username": "jack",
+                    "plugins": {
+                        "hmac-auth": {
+                            "key_id": "my-access-key",
+                            "secret_key": "my-secret-key"
+                        },
+                        "consumer-restriction": {
+                            "type": "route_id",
+                            "blacklist": [ "1" ],
+                            "rejected_code": 401
+                        }
+                    }
+                }]]
+                )
+
+            ngx.status = code
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 50: verify: valid blacklist `route_id`
+--- config
+location /t {
+    content_by_lua_block {
+        local ngx_time   = ngx.time
+        local ngx_http_time = ngx.http_time
+        local core = require("apisix.core")
+        local t = require("lib.test_admin")
+        local hmac = require("resty.hmac")
+        local ngx_encode_base64 = ngx.encode_base64
+
+        local secret_key = "my-secret-key"
+        local timestamp = ngx_time()
+        local gmt = ngx_http_time(timestamp)
+        local key_id = "my-access-key"
+        local custom_header_a = "asld$%dfasf"
+        local custom_header_b = "23879fmsldfk"
+
+        local signing_string = {
+            key_id,
+            "GET /hello",
+            "date: " .. gmt,
+            "x-custom-header-a: " .. custom_header_a,
+            "x-custom-header-b: " .. custom_header_b
+        }
+        signing_string = core.table.concat(signing_string, "\n") .. "\n"
+
+        local signature = hmac:new(secret_key, hmac.ALGOS.SHA256):final(signing_string)
+        core.log.info("signature:", ngx_encode_base64(signature))
+        local headers = {}
+        headers["Date"] = gmt
+        headers["Authorization"] = "Signature keyId=\"" .. key_id .. "\",algorithm=\"hmac-sha256\"" .. ",headers=\"@request-target date x-custom-header-a x-custom-header-b\",signature=\"" .. ngx_encode_base64(signature) .. "\""
+        headers["x-custom-header-a"] = custom_header_a
+        headers["x-custom-header-b"] = custom_header_b
+
+        local code, body = t.test('/hello',
+            ngx.HTTP_GET,
+            "",
+            nil,
+            headers
+        )
+
+        ngx.status = code
+        ngx.say(body)
+    }
+}
+--- request
+GET /t
+--- error_code: 401
+--- response_body eval
+qr/\{"message":"The route_id is forbidden."\}/
+
+
+
+=== TEST 51: delete: route (id: 1)
 --- config
     location /t {
         content_by_lua_block {
@@ -1245,12 +1370,10 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 38: delete: `service_id` is 1
+=== TEST 52: delete: `service_id` is 1
 --- config
     location /t {
         content_by_lua_block {
@@ -1265,12 +1388,10 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 39: delete: `service_id` is 2
+=== TEST 53: delete: `service_id` is 2
 --- config
     location /t {
         content_by_lua_block {
@@ -1285,5 +1406,3 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]

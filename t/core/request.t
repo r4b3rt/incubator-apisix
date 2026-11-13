@@ -21,13 +21,21 @@ no_long_string();
 no_root_location();
 log_level("info");
 
+add_block_preprocessor(sub {
+    my ($block) = @_;
+
+    if (!$block->request) {
+        $block->set_value("request", "GET /t");
+    }
+});
+
 run_tests;
 
 __DATA__
 
 === TEST 1: get_ip
 --- config
-    location = /hello {
+    location /t {
         real_ip_header X-Real-IP;
 
         set_real_ip_from 0.0.0.0/0;
@@ -51,20 +59,16 @@ __DATA__
             ngx.say(ip)
         }
     }
---- request
-GET /hello
 --- more_headers
 X-Real-IP: 10.0.0.1
 --- response_body
 127.0.0.1
---- no_error_log
-[error]
 
 
 
 === TEST 2: get_ip
 --- config
-    location = /hello {
+    location /t {
         real_ip_header X-Real-IP;
 
         set_real_ip_from 0.0.0.0/0;
@@ -88,20 +92,16 @@ X-Real-IP: 10.0.0.1
             ngx.say(ip)
         }
     }
---- request
-GET /hello
 --- more_headers
 X-Real-IP: 10.0.0.1
 --- response_body
 127.0.0.1
---- no_error_log
-[error]
 
 
 
 === TEST 3: get_ip and X-Forwarded-For
 --- config
-    location = /hello {
+    location /t {
         real_ip_header X-Forwarded-For;
 
         set_real_ip_from 0.0.0.0/0;
@@ -125,20 +125,16 @@ X-Real-IP: 10.0.0.1
             ngx.say(ip)
         }
     }
---- request
-GET /hello
 --- more_headers
 X-Forwarded-For: 10.0.0.1
 --- response_body
 127.0.0.1
---- no_error_log
-[error]
 
 
 
 === TEST 4: get_remote_client_ip
 --- config
-    location = /hello {
+    location /t {
         real_ip_header X-Real-IP;
 
         set_real_ip_from 0.0.0.0/0;
@@ -162,20 +158,16 @@ X-Forwarded-For: 10.0.0.1
             ngx.say(ip)
         }
     }
---- request
-GET /hello
 --- more_headers
 X-Real-IP: 10.0.0.1
 --- response_body
 10.0.0.1
---- no_error_log
-[error]
 
 
 
 === TEST 5: get_remote_client_ip and X-Forwarded-For
 --- config
-    location = /hello {
+    location /t {
         real_ip_header X-Forwarded-For;
         set_real_ip_from 0.0.0.0/0;
         set_real_ip_from ::/0;
@@ -198,20 +190,16 @@ X-Real-IP: 10.0.0.1
             ngx.say(ip)
         }
     }
---- request
-GET /hello
 --- more_headers
 X-Forwarded-For: 10.0.0.1
 --- response_body
 10.0.0.1
---- no_error_log
-[error]
 
 
 
 === TEST 6: get_host
 --- config
-    location = /hello {
+    location /t {
         real_ip_header X-Real-IP;
 
         set_real_ip_from 0.0.0.0/0;
@@ -235,20 +223,16 @@ X-Forwarded-For: 10.0.0.1
             ngx.say(host)
         }
     }
---- request
-GET /hello
 --- more_headers
 X-Real-IP: 10.0.0.1
 --- response_body
 localhost
---- no_error_log
-[error]
 
 
 
 === TEST 7: get_scheme
 --- config
-    location = /hello {
+    location /t {
         real_ip_header X-Real-IP;
 
         set_real_ip_from 0.0.0.0/0;
@@ -272,20 +256,16 @@ localhost
             ngx.say(scheme)
         }
     }
---- request
-GET /hello
 --- more_headers
 X-Real-IP: 10.0.0.1
 --- response_body
 http
---- no_error_log
-[error]
 
 
 
 === TEST 8: get_port
 --- config
-    location = /hello {
+    location /t {
         real_ip_header X-Real-IP;
 
         set_real_ip_from 0.0.0.0/0;
@@ -309,20 +289,16 @@ http
             ngx.say(port)
         }
     }
---- request
-GET /hello
 --- more_headers
 X-Real-IP: 10.0.0.1
 --- response_body
 1984
---- no_error_log
-[error]
 
 
 
 === TEST 9: get_http_version
 --- config
-    location = /hello {
+    location /t {
         real_ip_header X-Real-IP;
 
         set_real_ip_from 0.0.0.0/0;
@@ -346,20 +322,16 @@ X-Real-IP: 10.0.0.1
             ngx.say(http_version)
         }
     }
---- request
-GET /hello
 --- more_headers
 X-Real-IP: 10.0.0.1
 --- response_body
 1.1
---- no_error_log
-[error]
 
 
 
 === TEST 10: set header
 --- config
-    location = /hello {
+    location /t {
         content_by_lua_block {
             local core = require("apisix.core")
             ngx.ctx.api_ctx = {}
@@ -371,10 +343,336 @@ X-Real-IP: 10.0.0.1
             ngx.say(h2)
         }
     }
---- request
-GET /hello
 --- response_body
 nil
 t
---- no_error_log
-[error]
+
+
+
+=== TEST 11: get_post_args
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            local ngx_ctx = ngx.ctx
+            local api_ctx = ngx_ctx.api_ctx
+            if api_ctx == nil then
+                api_ctx = core.tablepool.fetch("api_ctx", 0, 32)
+                ngx_ctx.api_ctx = api_ctx
+            end
+
+            core.ctx.set_vars_meta(api_ctx)
+
+            local args = core.request.get_post_args(ngx.ctx.api_ctx)
+            ngx.say(args["c"])
+            ngx.say(args["v"])
+        }
+    }
+--- request
+POST /t
+c=z_z&v=x%20x
+--- response_body
+z_z
+x x
+
+
+
+=== TEST 12: get_post_args when the body is stored in temp file
+--- config
+    location /t {
+        client_body_in_file_only clean;
+        content_by_lua_block {
+            local core = require("apisix.core")
+            local ngx_ctx = ngx.ctx
+            local api_ctx = ngx_ctx.api_ctx
+            if api_ctx == nil then
+                api_ctx = core.tablepool.fetch("api_ctx", 0, 32)
+                ngx_ctx.api_ctx = api_ctx
+            end
+
+            core.ctx.set_vars_meta(api_ctx)
+
+            local args = core.request.get_post_args(ngx.ctx.api_ctx)
+            ngx.say(args["c"])
+        }
+    }
+--- request
+POST /t
+c=z_z&v=x%20x
+--- response_body
+nil
+--- error_log
+the post form is too large: request body in temp file not supported
+
+
+
+=== TEST 13: get_method
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            ngx.say(core.request.get_method())
+        }
+    }
+--- request
+POST /t
+--- response_body
+POST
+
+
+
+=== TEST 14: add header
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            ngx.ctx.api_ctx = {}
+            local ctx = ngx.ctx.api_ctx
+            local json = require("toolkit.json")
+            core.request.add_header(ctx, "test_header", "test")
+            local h = core.request.header(ctx, "test_header")
+            ngx.say(h)
+            core.request.add_header(ctx, "test_header", "t2")
+            local h2 = core.request.headers(ctx)["test_header"]
+            ngx.say(json.encode(h2))
+            core.request.add_header(ctx, "test_header", "t3")
+            local h3 = core.request.headers(ctx)["test_header"]
+            ngx.say(json.encode(h3))
+        }
+    }
+--- response_body
+test
+["test","t2"]
+["test","t2","t3"]
+
+
+
+=== TEST 15: call add_header with deprecated way
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            ngx.ctx.api_ctx = {}
+            local ctx = ngx.ctx.api_ctx
+            core.request.add_header("test_header", "test")
+            local h = core.request.header(ctx, "test_header")
+            ngx.say(h)
+        }
+    }
+--- response_body
+test
+--- error_log
+DEPRECATED: use add_header(ctx, header_name, header_value) instead
+
+
+
+=== TEST 16: after setting the header, ctx.var can still access the correct value
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            ngx.ctx.api_ctx = {}
+            local ctx = ngx.ctx.api_ctx
+            core.ctx.set_vars_meta(ctx)
+
+            ctx.var.http_server = "ngx"
+            ngx.say(ctx.var.http_server)
+
+            core.request.set_header(ctx, "server",  "test")
+            ngx.say(ctx.var.http_server)
+
+            -- case-insensitive
+            core.request.set_header(ctx, "Server",  "apisix")
+            ngx.say(ctx.var.http_server)
+        }
+    }
+--- response_body
+ngx
+test
+apisix
+
+
+
+=== TEST 17: get_json_request_body_table caches result and re-decodes after set_body_data
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            local json = require("apisix.core.json")
+
+            ngx.ctx.api_ctx = {}
+
+            local decode_count = 0
+            local orig_decode = json.decode
+            json.decode = function(str)
+                decode_count = decode_count + 1
+                return orig_decode(str)
+            end
+
+            -- first call: populates cache
+            local t1 = core.request.get_json_request_body_table()
+            -- second and third calls: hit cache, no extra decode
+            local t2 = core.request.get_json_request_body_table()
+            local t3 = core.request.get_json_request_body_table()
+
+            ngx.say("model: ", t1 and t1.model)
+            ngx.say("same table: ", t1 == t2 and t2 == t3)
+            ngx.say("decode_count: ", decode_count)
+
+            -- invalidate cache by replacing body
+            ngx.req.set_body_data('{"model":"claude"}')
+
+            -- cache cleared, must re-decode
+            local t4 = core.request.get_json_request_body_table()
+
+            json.decode = orig_decode
+
+            ngx.say("after set_body model: ", t4 and t4.model)
+            ngx.say("decode_count: ", decode_count)
+        }
+    }
+--- request
+POST /t
+{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}
+--- more_headers
+Content-Type: application/json
+--- response_body
+model: gpt-4
+same table: true
+decode_count: 1
+after set_body model: claude
+decode_count: 2
+
+
+
+=== TEST 18: set_header with a different case should not leave a stale entry in the cached headers
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            ngx.ctx.api_ctx = {}
+            local ctx = ngx.ctx.api_ctx
+
+            -- warm the headers cache
+            core.request.headers(ctx)
+
+            core.request.set_header(ctx, "X-Mixed-Case", "new")
+
+            local count = 0
+            local value
+            for k, v in pairs(core.request.headers(ctx)) do
+                if string.lower(k) == "x-mixed-case" then
+                    count = count + 1
+                    value = v
+                end
+            end
+            ngx.say("count: ", count)
+            ngx.say("value: ", value)
+            ngx.say("header: ", core.request.header(ctx, "X-Mixed-Case"))
+        }
+    }
+--- more_headers
+x-mixed-case: old
+--- response_body
+count: 1
+value: new
+header: new
+
+
+
+=== TEST 19: get_body marks a body over max_size as too_large
+--- config
+    location /read {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            ngx.ctx.api_ctx = {}
+            local body, err, kind = core.request.get_body(8, ngx.ctx.api_ctx)
+            ngx.say("body: ", body)
+            ngx.say("err: ", err)
+            ngx.say("kind: ", kind)
+        }
+    }
+    location /t {
+        content_by_lua_block {
+            local http = require("resty.http")
+            local httpc = http.new()
+            local res, err = httpc:request_uri("http://127.0.0.1:1984/read", {
+                method = "POST",
+                body = [[{"name":"doggie"}]],
+            })
+            if not res then
+                ngx.say(err)
+                return
+            end
+            ngx.print(res.body)
+        }
+    }
+--- response_body
+body: nil
+err: request size 17 is greater than the maximum size 8 allowed
+kind: too_large
+
+
+
+=== TEST 20: plugins read the first 100 request headers by default
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            ngx.ctx.api_ctx = {}
+            local ctx = ngx.ctx.api_ctx
+            local count = 0
+            for _ in pairs(core.request.headers(ctx)) do
+                count = count + 1
+            end
+            ngx.say("count: ", count)
+            ngx.say("x-last: ", core.request.header(ctx, "X-Last"))
+        }
+    }
+--- more_headers eval
+CORE::join("", map { "X-Pad-$_: $_\n" } 1 .. 100) . "X-Last: yes\n"
+--- response_body
+count: 100
+x-last: nil
+
+
+
+=== TEST 21: max_request_headers_readable raises the limit
+--- yaml_config
+apisix:
+    node_listen: 1984
+    max_request_headers_readable: 200
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            ngx.ctx.api_ctx = {}
+            local ctx = ngx.ctx.api_ctx
+            ngx.say("x-last: ", core.request.header(ctx, "X-Last"))
+        }
+    }
+--- more_headers eval
+CORE::join("", map { "X-Pad-$_: $_\n" } 1 .. 100) . "X-Last: yes\n"
+--- response_body
+x-last: yes
+
+
+
+=== TEST 22: max_request_headers_readable 0 reads all headers
+--- yaml_config
+apisix:
+    node_listen: 1984
+    max_request_headers_readable: 0
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            ngx.ctx.api_ctx = {}
+            local ctx = ngx.ctx.api_ctx
+            ngx.say("x-last: ", core.request.header(ctx, "X-Last"))
+        }
+    }
+--- more_headers eval
+CORE::join("", map { "X-Pad-$_: $_\n" } 1 .. 300) . "X-Last: yes\n"
+--- response_body
+x-last: yes

@@ -19,17 +19,14 @@
 
 # Contributing to APISIX
 
-Firstly, thanks for your interest in contributing! I hope that this will be a
-pleasant first experience for you, and that you will return to continue
+Firstly, thanks for your interest in contributing! I hope that this will be a pleasant first experience for you, and that you will return to continue
 contributing.
 
 ## How to contribute?
 
-Most of the contributions that we receive are code contributions, but you can
-also contribute to the documentation or simply report solid bugs
-for us to fix.
+Most of the contributions that we receive are code contributions, but you can also contribute to the documentation or simply report solid bugs for us to fix. Nor is code the only way to contribute to the project. We strongly value documentation, integration with other project, and gladly accept improvements for these aspects.
 
- For new contributors, please take a look at issues with a tag called [Good first issue](https://github.com/apache/apisix/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) or [Help wanted](https://github.com/apache/apisix/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22).
+For new contributors, please take a look at issues with a tag called [Good first issue](https://github.com/apache/apisix/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) or [Help wanted](https://github.com/apache/apisix/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22).
 
 ## How to report a bug?
 
@@ -47,14 +44,28 @@ Once we've discussed your changes and you've got your code ready, make sure that
 * Includes tests for new functionality.
 * References the original issue in the description, e.g. "Resolves #123".
 * Has a [good commit message](http://tbaggery.com/2008/04/19/a-note-about-git-commit-messages.html).
-* Ensure your pull request's title starts from one of the word in the `types` section of [semantic.yml](https://github.com/apache/apisix/blob/master/.github/semantic.yml).
+* Ensure your pull request's title starts from one of the word in the `types` section of [semantic.yml](https://github.com/apache/apisix/blob/master/.github/workflows/semantic.yml).
+* Follow the [PR manners](https://raw.githubusercontent.com/apache/apisix/master/.github/PULL_REQUEST_TEMPLATE.md)
 
 ## Contribution Guidelines for Documentation
 
 * Linting/Style
 
-    Use a markdown linting tool to lint the content. The following is a [plugin](https://github.com/apache/apisix/issues/1273)
-    used by our community to lint the docs.
+    For linting both our Markdown and YAML files we use:
+
+    - npm based [markdownlint-cli](https://www.npmjs.com/package/markdownlint-cli)
+
+    For linting all files' license header we use:
+
+    - [license-eye](https://github.com/apache/skywalking-eyes)
+
+    For linting our shell files we use:
+
+    - [shellcheck](https://github.com/koalaman/shellcheck)
+
+    For linting our zh document files we use:
+
+    - [autocorrect](https://github.com/huacnlee/autocorrect)
 
 * Active Voice
 
@@ -102,43 +113,70 @@ Once we've discussed your changes and you've got your code ready, make sure that
         $ luarocks install luacheck
         # check source code
         $ make lint
-        luacheck -q lua
-        Total: 0 warnings / 0 errors in 74 files
-        ./utils/lj-releng \
-            apisix/*.lua \
-            apisix/admin/*.lua \
-            apisix/core/*.lua \
-            apisix/http/*.lua \
-            apisix/http/router/*.lua \
-            apisix/plugins/*.lua \
-            apisix/plugins/grpc-transcode/*.lua \
-            apisix/plugins/limit-count/*.lua > \
-            /tmp/check.log 2>&1 || (cat /tmp/check.log && exit 1)
+        ./utils/check-lua-code-style.sh
+        + luacheck -q apisix t/lib
+        Total: 0 warnings / 0 errors in 146 files
+        + find apisix -name *.lua ! -wholename apisix/cli/ngx_tpl.lua -exec ./utils/lj-releng {} +
+        + grep -E ERROR.*.lua: /tmp/check.log
+        + true
+        + [ -s /tmp/error.log ]
+        ./utils/check-test-code-style.sh
+        + find t -name '*.t' -exec grep -E '\-\-\-\s+(SKIP|ONLY|LAST|FIRST)$' '{}' +
+        + true
+        + '[' -s /tmp/error.log ']'
+        + find t -name '*.t' -exec ./utils/reindex '{}' +
+        + grep done. /tmp/check.log
+        + true
+        + '[' -s /tmp/error.log ']'
 ```
 
-      The `lj-releng` will be downloaded automatically by `make lint` if not exists.
+      The `lj-releng` and `reindex` will be downloaded automatically by `make lint` if not exists.
 
 * test case style
-    * Use tool to check your test case style statically by command, eg: `reindex t/admin/*.t`.
-
-```shell
-    # install `reindex` first before run it
-    # wget https://raw.githubusercontent.com/iresty/openresty-devel-utils/master/reindex
-    # ./reindex test cases
-    $ reindex t/admin/*.t
-    reindex: t/plugin/example.t:	skipped.        # No changes needed
-    reindex: t/plugin/fault-injection.t:	done.   # updated
-    reindex: t/plugin/grpc-transcode.t:	skipped.
-    ... ...
-    reindex: t/plugin/udp-logger.t:	done.
-    reindex: t/plugin/zipkin.t:	skipped.
-```
-
-    * By the way, we can download "reindex" to another path and add this path to "PATH" environment.
+    * Use tool to check your test case style statically by command, eg: `make lint`.
     * When the test file is too large, for example > 800 lines, you should split it to a new file.
       Please take a look at `t/plugin/limit-conn.t` and `t/plugin/limit-conn2.t`.
+    * For more details, see the [testing framework](https://github.com/apache/apisix/blob/master/docs/en/latest/internal/testing-framework.md)
+
+## API Contracts
+
+When changing Admin API routes, schemas, validation, or responses, edit the modular
+source under `docs/openapi/admin-api/`, run `make bundle-admin-api-spec`, and commit
+the regenerated `docs/en/latest/admin-api.json` in the same PR. Do not edit the
+generated JSON directly. Implementation and tests are authoritative. Keep the
+contract explicit; do not fetch or generate it from downstream documentation.
+Plugin-specific schemas remain available through the schema endpoints.
+
+When changing Control API routes or responses, also review
+`docs/en/latest/control-api.json`. The contract documents the built-in API and stable
+patterns registered by shipped optional components. Qualify configuration-dependent
+endpoints in their operation descriptions; plugin-specific endpoints remain documented
+with their plugins.
+
+Run the contract checks from the repository root:
+
+```shell
+python3 -m pip install -r utils/requirements-admin-api.txt
+python3 -m unittest discover -s t/openapi -v
+python3 utils/validate-admin-api.py
+python3 utils/validate-control-api.py
+```
+
+The validator checks OpenAPI 3.1, local references, operation IDs, path parameters,
+request/response schemas, examples, defaults, and the English/Chinese documentation
+and runtime versions. Master describes the current source, including unreleased changes;
+its version follows the repository version files. The CI job runs on implementation
+changes too. Schema validity does not replace reviewing behavior against Lua and tests.
+
+## Contributor gifts
+
+If you have contributed to Apache APISIX, no matter it is a code contribution to fix a bug or a feature request, or a documentation change, Congratulations! You are eligible to receive the APISIX special gifts with a digital certificate! It's always been the community effort that has made Apache APISIX be understood and used by more developers.
+
+![Contributor gifts](https://static.apiseven.com/2022/12/29/63acfb2f208e1.png)
+
+Contributors can request gifts by filling out this [Google form](https://forms.gle/DhPL96LnJwuaHjHU7) or [QQ Form](https://wj.qq.com/s2/11438041/7b07/). After filling in the form, please wait patiently. The community needs some time to review submissions.
 
 ## Do you have questions about the source code?
 
-- **QQ Group**: 578997126(recommended), 552030619
+- **QQ Group**: 781365357(recommended), 578997126, 552030619
 - Join in `apisix` channel at [Apache Slack](http://s.apache.org/slack-invite). If the link is not working, find the latest one at [Apache INFRA WIKI](https://cwiki.apache.org/confluence/display/INFRA/Slack+Guest+Invites).

@@ -41,12 +41,10 @@ GET /t
 --- response_body
 remote_addr: 127.0.0.1
 server_port: 1984
---- no_error_log
-[error]
 
 
 
-=== TEST 2: http header + arg
+=== TEST 2: http header
 --- config
     location /t {
         content_by_lua_block {
@@ -55,16 +53,12 @@ server_port: 1984
             core.ctx.set_vars_meta(ctx)
 
             ngx.say("http_host: ", ctx.var["http_host"])
-            ngx.say("arg_a: ", ctx.var["arg_a"])
         }
     }
 --- request
-GET /t?a=aaa
+GET /t
 --- response_body
 http_host: localhost
-arg_a: aaa
---- no_error_log
-[error]
 
 
 
@@ -83,8 +77,8 @@ arg_a: aaa
 GET /t?a=aaa
 --- response_body
 cookie_host: nil
---- error_log
-failed to fetch cookie value by key: cookie_host error: no cookie found in the current request
+--- no_error_log
+failed to fetch cookie value by key
 
 
 
@@ -100,10 +94,13 @@ failed to fetch cookie value by key: cookie_host error: no cookie found in the c
             ngx.say("cookie_b: ", ctx.var["cookie_b"])
             ngx.say("cookie_c: ", ctx.var["cookie_c"])
             ngx.say("cookie_d: ", ctx.var["cookie_d"])
+            ngx.say("cookie with dash and uppercase: ", ngx.var["cookie_X-user-id"])
+            ngx.say("cookie with []: ", ngx.var["cookie_user[id]"])
+            ngx.say("cookie with .: ", ngx.var["cookie_user.id"])
         }
     }
 --- more_headers
-Cookie: a=a; b=bb; c=ccc
+Cookie: a=a; b=bb; c=ccc; X-user-id=2; user[id]=3; user.id=4
 --- request
 GET /t?a=aaa
 --- response_body
@@ -111,8 +108,9 @@ cookie_a: a
 cookie_b: bb
 cookie_c: ccc
 cookie_d: nil
---- no_error_log
-[error]
+cookie with dash and uppercase: 2
+cookie with []: 3
+cookie with .: 4
 
 
 
@@ -193,8 +191,6 @@ invalid argument, expect string value
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -205,8 +201,6 @@ GET /hello
 hello world
 --- error_log
 route_id: 1
---- no_error_log
-[error]
 
 
 
@@ -219,19 +213,12 @@ route_id: 1
                  ngx.HTTP_PUT,
                  [[{
                     "desc": "new_service"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "desc": "new_service"
-                        },
-                        "key": "/apisix/services/1"
-                    },
-                    "action": "set"
                 }]]
                 )
 
-            ngx.status = code
+            if code >= 300 then
+                ngx.status = code
+            end
             ngx.say(body)
         }
     }
@@ -239,8 +226,6 @@ route_id: 1
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -277,8 +262,6 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -289,8 +272,6 @@ GET /hello
 hello world
 --- error_log
 service_id: empty route_id
---- no_error_log
-[error]
 
 
 
@@ -328,8 +309,6 @@ service_id: empty route_id
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -340,8 +319,6 @@ GET /hello
 hello world
 --- error_log
 service_id: 1
---- no_error_log
-[error]
 
 
 
@@ -372,8 +349,6 @@ service_id: 1
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -413,8 +388,6 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -427,8 +400,6 @@ apikey: auth-jack
 hello world
 --- error_log
 consumer_name: consumer_jack
---- no_error_log
-[error]
 
 
 
@@ -467,8 +438,6 @@ consumer_name: consumer_jack
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -479,8 +448,6 @@ GET /hello
 hello world
 --- error_log
 consumer_name: consumer_name is nil
---- no_error_log
-[error]
 
 
 
@@ -520,8 +487,6 @@ consumer_name: consumer_name is nil
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -534,8 +499,6 @@ apikey: auth-jack
 hello world
 --- error_log
 consumer_name: consumer_jack
---- no_error_log
-[error]
 
 
 
@@ -574,8 +537,6 @@ consumer_name: consumer_jack
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -586,8 +547,6 @@ GET /hello
 hello world
 --- error_log
 consumer_name: consumer_name is nil
---- no_error_log
-[error]
 
 
 
@@ -602,20 +561,11 @@ consumer_name: consumer_name is nil
                     "log_format": {
                         "service_name": "$service_name"
                     }
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "log_format": {
-                                "service_name": "$service_name"
-                            }
-                        }
-                    },
-                    "action": "set"
                 }]]
                 )
-
-            ngx.status = code
+            if code >= 300 then
+                ngx.status = code
+            end
             ngx.say(body)
         }
     }
@@ -623,8 +573,6 @@ consumer_name: consumer_name is nil
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -666,8 +614,6 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -700,8 +646,6 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -753,8 +697,6 @@ qr/request log: \{"route_id":"1","service_id":"1","service_name":"ctx_var-suppor
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -779,16 +721,6 @@ qr/request log: \{"route_id":"1"\}/
                     "log_format": {
                         "route_name": "$route_name"
                     }
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "log_format": {
-                                "route_name": "$route_name"
-                            }
-                        }
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -800,8 +732,6 @@ qr/request log: \{"route_id":"1"\}/
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -844,8 +774,6 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -897,8 +825,6 @@ qr/request log: \{"route_id":"1","route_name":"ctx_var-support-route_name"\}/
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -909,3 +835,136 @@ GET /hello
 hello world
 --- error_log eval
 qr/request log: \{"route_id":"1"\}/
+
+
+
+=== TEST 34: add metadata, service and route, and the service is bound to the route
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/plugin_metadata/http-logger',
+                ngx.HTTP_PUT,
+                [[{
+                    "log_format": {
+                        "route_name": "$route_name",
+                        "service_name": "$service_name"
+                    }
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+                ngx.say(body)
+            end
+
+            local code, body = t('/apisix/admin/services/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "name": "my_service",
+                    "plugins": {
+                        "http-logger": {
+                            "uri": "http://127.0.0.1:1980/log",
+                            "batch_max_size": 1,
+                            "max_retry_count": 1,
+                            "retry_delay": 2,
+                            "buffer_duration": 2,
+                            "concat_method": "json"
+                        }
+                    }
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+                ngx.say(body)
+            end
+
+            code, body = t('/apisix/admin/routes/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "name": "my_route",
+                    "uri": "/hello",
+                    "service_id": 1,
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    }
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 35: hit route and route_name and service_name are different
+--- request
+GET /hello
+--- response_body
+hello world
+--- error_log eval
+qr/request log: \{"route_id":"1","route_name":"my_route","service_id":"1","service_name":"my_service"\}/
+
+
+
+=== TEST 36: upstream_unresolved_host is available in the nginx access log
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "uri": "/hello",
+                    "upstream": {
+                        "nodes": {
+                            "localhost:1980": 1
+                        },
+                        "type": "roundrobin"
+                    }
+                }]]
+                )
+            if code >= 300 then
+                ngx.status = code
+                ngx.say(body)
+                return
+            end
+
+            -- a real proxied request so the access log line gets written
+            local http = require("resty.http")
+            local httpc = http.new()
+            local res, err = httpc:request_uri(
+                "http://127.0.0.1:" .. ngx.var.server_port .. "/hello")
+            if not res or res.status ~= 200 then
+                ngx.say("request failed: ", err or res.status)
+                return
+            end
+            -- let the log phase flush the access log line
+            ngx.sleep(0.1)
+
+            local fd = assert(io.open(ngx.config.prefix() .. "logs/access.log", "r"))
+            local content = fd:read("*a")
+            fd:close()
+            -- the configured domain shows up before DNS resolution
+            if content:find("unresolved_host=localhost", 1, true) then
+                ngx.say("found")
+            else
+                ngx.say("not found")
+            end
+        }
+    }
+--- request
+GET /t
+--- response_body
+found

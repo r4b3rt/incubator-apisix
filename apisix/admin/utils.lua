@@ -16,6 +16,9 @@
 --
 local core    = require("apisix.core")
 local ngx_time = ngx.time
+local tonumber = tonumber
+local ipairs = ipairs
+local pairs = pairs
 
 
 local _M = {}
@@ -23,8 +26,8 @@ local _M = {}
 
 local function inject_timestamp(conf, prev_conf, patch_conf)
     if not conf.create_time then
-        if prev_conf and prev_conf.node.value.create_time then
-            conf.create_time = prev_conf.node.value.create_time
+        if prev_conf and (prev_conf.node or prev_conf.list).value.create_time then
+            conf.create_time = (prev_conf.node or prev_conf.list).value.create_time
         else
             -- As we don't know existent data's create_time, we have to pretend
             -- they are created now.
@@ -32,8 +35,15 @@ local function inject_timestamp(conf, prev_conf, patch_conf)
         end
     end
 
-    -- For PATCH request, the modification is passed as 'patch_conf'
-    if not conf.update_time or (patch_conf and patch_conf.update_time == nil) then
+    if not conf.update_time or
+        -- For PATCH request, the modification is passed as 'patch_conf'
+        -- If the sub path is used, the 'patch_conf' will be a placeholder `true`
+        (patch_conf and (patch_conf == true or patch_conf.update_time == nil))
+    then
+        -- reset the update_time if:
+        -- 1. PATCH request, with sub path
+        -- 2. PATCH request, update_time not given
+        -- 3. Other request, update_time not given
         conf.update_time = ngx_time()
     end
 end
@@ -56,5 +66,51 @@ function _M.inject_conf_with_prev_conf(kind, key, conf)
     return true
 end
 
+
+-- fix_count makes the "count" field returned by etcd reasonable
+function _M.fix_count(body, id)
+    if body.count then
+        if not id then
+            -- remove the count of placeholder (init_dir)
+            body.count = tonumber(body.count) - 1
+        else
+            body.count = tonumber(body.count)
+        end
+    end
+end
+
+
+function _M.decrypt_params(decrypt_func, body, schema_type)
+    -- list
+    if body.list then
+        for _, route in ipairs(body.list) do
+            if route.value and schema_type == core.schema.TYPE_METADATA then
+                decrypt_func(route.value.id, route.value, schema_type)
+            elseif route.value and route.value.plugins then
+                for name, conf in pairs(route.value.plugins) do
+                    decrypt_func(name, conf, schema_type)
+                end
+            end
+        end
+        return
+    end
+
+    -- node
+    local plugins = body.node and body.node.value
+                    and body.node.value.plugins
+
+    if plugins then
+        for name, conf in pairs(plugins) do
+            decrypt_func(name, conf, schema_type)
+        end
+    end
+
+    -- metadata
+    local conf = body.node and body.node.value
+
+    if conf and schema_type == core.schema.TYPE_METADATA then
+        decrypt_func(conf.id, conf, schema_type)
+    end
+end
 
 return _M

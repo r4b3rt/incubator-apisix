@@ -15,12 +15,66 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
+set -ex
 
-wget https://github.com/luarocks/luarocks/archive/v2.4.4.tar.gz
-tar -xf v2.4.4.tar.gz
-cd luarocks-2.4.4 || exit
-./configure --prefix=/usr > build.log 2>&1 || (cat build.log && exit 1)
+# you might need sudo to run this script
+if [ -z ${OPENRESTY_PREFIX} ]; then
+    OPENRESTY_PREFIX="/usr/local/openresty"
+fi
+
+LUAROCKS_VER=3.12.0
+LUAROCKS_SHA256=745e3c5df2f955ecaf60ba1361cfc224564ef7ec210e9a784a3858ae853e9f7c
+LUAROCKS_TARBALL=v"$LUAROCKS_VER".tar.gz
+
+wget -q -O "$LUAROCKS_TARBALL" https://github.com/luarocks/luarocks/archive/"$LUAROCKS_TARBALL"
+echo "$LUAROCKS_SHA256  $LUAROCKS_TARBALL" | sha256sum -c -
+
+tar -xf "$LUAROCKS_TARBALL"
+rm -f "$LUAROCKS_TARBALL"
+cd luarocks-"$LUAROCKS_VER" || exit
+
+OR_BIN="$OPENRESTY_PREFIX/bin/openresty"
+OR_VER=$($OR_BIN -v 2>&1 | awk -F '/' '{print $2}' | awk -F '.' '{print $1 * 100 + $2}')
+if [[ -e $OR_BIN && "$OR_VER" -ge 119 ]]; then
+    WITH_LUA_OPT="--with-lua=${OPENRESTY_PREFIX}/luajit"
+else
+    # For old version OpenResty, we still need to install LuaRocks with Lua
+    WITH_LUA_OPT=
+fi
+
+./configure $WITH_LUA_OPT \
+    > build.log 2>&1 || (cat build.log && exit 1)
+
 make build > build.log 2>&1 || (cat build.log && exit 1)
 sudo make install > build.log 2>&1 || (cat build.log && exit 1)
 cd .. || exit
-rm -rf luarocks-2.4.4
+rm -rf luarocks-"$LUAROCKS_VER"
+
+mkdir ~/.luarocks || true
+
+# For old version OpenResty, we still need to install LuaRocks with Lua
+OPENSSL_PREFIX=${OPENRESTY_PREFIX}/openssl
+if [ -d ${OPENRESTY_PREFIX}/openssl3 ]; then
+    OPENSSL_PREFIX=${OPENRESTY_PREFIX}/openssl3
+elif [ -d ${OPENRESTY_PREFIX}/openssl111 ]; then
+    OPENSSL_PREFIX=${OPENRESTY_PREFIX}/openssl111
+fi
+
+[ ! -d ${OPENSSL_PREFIX} ] && echo "Warning: the path ${OPENSSL_PREFIX} is not found."
+
+FOUND_PATH=$(echo "${PATH}" | grep -oP '(?<=:|)/usr/local/bin(?=:|)') || true
+if [[ "${FOUND_PATH}" == "" ]]; then
+   echo "Warning: the path /usr/local/bin is not included in the system default PATH variable."
+   export PATH=$PATH:/usr/local/bin
+fi
+
+luarocks config variables.OPENSSL_DIR ${OPENSSL_PREFIX}
+luarocks config variables.OPENSSL_LIBDIR ${OPENSSL_PREFIX}/lib
+luarocks config variables.OPENSSL_INCDIR ${OPENSSL_PREFIX}/include
+luarocks config variables.YAML_DIR /usr
+
+# lrexlib-pcre needs PCRE1, which newer distributions (Ubuntu 26.04, Debian 13)
+# no longer ship; use the copy bundled with APISIX runtime instead.
+if [ -f "${OPENRESTY_PREFIX}/pcre/include/pcre.h" ]; then
+    luarocks config variables.PCRE_DIR "${OPENRESTY_PREFIX}/pcre"
+fi

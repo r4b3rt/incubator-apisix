@@ -17,25 +17,35 @@
 local core     = require("apisix.core")
 local consumer_mod = require("apisix.consumer")
 local plugin_name = "key-auth"
-local ipairs   = ipairs
-
-
-local lrucache = core.lrucache.new({
-    type = "plugin",
-})
+local schema_def = require("apisix.schema_def")
+local auth_utils = require("apisix.utils.auth")
 
 local schema = {
     type = "object",
-    additionalProperties = false,
-    properties = {},
+    properties = {
+        header = {
+            type = "string",
+            default = "apikey",
+        },
+        query = {
+            type = "string",
+            default = "apikey",
+        },
+        realm = schema_def.get_realm_schema("key"),
+        hide_credentials = {
+            type = "boolean",
+            default = false,
+        },
+        anonymous_consumer = schema_def.anonymous_consumer_schema,
+    },
 }
 
 local consumer_schema = {
     type = "object",
-    additionalProperties = false,
     properties = {
-        key = {type = "string"},
+        key = { type = "string" },
     },
+    encrypt_fields = {"key"},
     required = {"key"},
 }
 
@@ -50,24 +60,6 @@ local _M = {
 }
 
 
-local create_consume_cache
-do
-    local consumer_names = {}
-
-    function create_consume_cache(consumers)
-        core.table.clear(consumer_names)
-
-        for _, consumer in ipairs(consumers.nodes) do
-            core.log.info("consumer node: ", core.json.delay_encode(consumer))
-            consumer_names[consumer.auth_conf.key] = consumer
-        end
-
-        return consumer_names
-    end
-
-end -- do
-
-
 function _M.check_schema(conf, schema_type)
     if schema_type == core.schema.TYPE_CONSUMER then
         return core.schema.check(consumer_schema, conf)
@@ -76,27 +68,79 @@ function _M.check_schema(conf, schema_type)
     end
 end
 
+local function find_consumer(ctx, conf)
+    local from_header = true
+    local key = core.request.header(ctx, conf.header)
+
+    if not key then
+        local uri_args = core.request.get_uri_args(ctx) or {}
+        key = uri_args[conf.query]
+        from_header = false
+    end
+
+    if not key then
+        return nil, nil, "Missing API key in request"
+    end
+
+    local consumer, consumer_conf, err = consumer_mod.find_consumer(plugin_name, "key", key)
+    if not consumer then
+        err = "failed to find consumer: " .. (err or "invalid api key")
+        -- surface the real reason to the multi-auth orchestrator
+        if auth_utils.is_running_under_multi_auth(ctx) then
+            return nil, nil, err
+        end
+        core.log.warn(err)
+        return nil, nil, "Invalid API key in request"
+    end
+
+    if conf.hide_credentials then
+        if from_header then
+            core.request.set_header(ctx, conf.header, nil)
+        else
+            local args = core.request.get_uri_args(ctx)
+            args[conf.query] = nil
+            core.request.set_uri_args(ctx, args)
+        end
+    end
+
+    return consumer, consumer_conf
+end
+
 
 function _M.rewrite(conf, ctx)
-    local key = core.request.header(ctx, "apikey")
-    if not key then
-        return 401, {message = "Missing API key found in request"}
-    end
-
-    local consumer_conf = consumer_mod.plugin(plugin_name)
-    if not consumer_conf then
-        return 401, {message = "Missing related consumer"}
-    end
-
-    local consumers = lrucache("consumers_key", consumer_conf.conf_version,
-        create_consume_cache, consumer_conf)
-
-    local consumer = consumers[key]
+    local consumer, consumer_conf, err = find_consumer(ctx, conf)
     if not consumer then
-        return 401, {message = "Invalid API key in request"}
+        if not conf.anonymous_consumer then
+            core.response.set_header("WWW-Authenticate", "apikey realm=\"" .. conf.realm .. "\"")
+            return 401, { message = err}
+        end
+        -- Strip credentials before falling back to the anonymous consumer when
+        -- hide_credentials is enabled. find_consumer() only strips on the
+        -- successful-auth path, so without this an invalid credential would be
+        -- forwarded upstream during anonymous fallback. A request may carry the
+        -- credential in both the header and the query string, so clean up both.
+        if conf.hide_credentials then
+            if core.request.header(ctx, conf.header) then
+                core.request.set_header(ctx, conf.header, nil)
+            end
+            local args = core.request.get_uri_args(ctx) or {}
+            if args[conf.query] then
+                args[conf.query] = nil
+                core.request.set_uri_args(ctx, args)
+            end
+        end
+        consumer, consumer_conf, err = consumer_mod.get_anonymous_consumer(conf.anonymous_consumer)
+        if not consumer then
+            core.response.set_header("WWW-Authenticate", "apikey realm=\"" .. conf.realm .. "\"")
+            -- surface the real reason to the multi-auth orchestrator
+            if auth_utils.is_running_under_multi_auth(ctx) then
+                return 401, err
+            end
+            err = "key-auth failed to authenticate the request, code: 401. error: " .. err
+            core.log.error(err)
+            return 401, { message = "Invalid user authorization"}
+        end
     end
-    core.log.info("consumer: ", core.json.delay_encode(consumer))
-
     consumer_mod.attach_consumer(ctx, consumer, consumer_conf)
     core.log.info("hit key-auth rewrite")
 end

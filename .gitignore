@@ -42,8 +42,12 @@ luac.out
 # develop
 *.log
 *.pid
+*.orig
+*.rej
 t/servroot
-go
+t/certs/*.csr
+t/certs/*.srl
+t/xds-library/libxds.h
 conf/apisix.uid
 conf/nginx.conf
 deps
@@ -53,19 +57,46 @@ proxy_temp
 fastcgi_temp
 client_body_temp
 utils/lj-releng
-default.etcd/
+utils/reindex
+*.etcd/
+t/lib/dubbo*/**/target/
 .idea/
 *.iml
 \.*
 !.github/
-!.travis/
+!.devcontainer/
 !.gitmodules
 !.markdownlint.yml
-!.yamllint
-/conf/apisix.yaml
-/conf/apisix-*.yaml
-/conf/config-*.yaml
-!/conf/config-default.yaml
-/conf/debug-*.yaml
+!.licenserc.yaml
+!.ignore_words
+conf/apisix.yaml
+conf/apisix-*.yaml
+conf/config-*.yaml
+!conf/config-default.yaml
+conf/debug-*.yaml
+build-cache/
+t/fuzzing/__pycache__/
+boofuzz-results/
+*.pyc
+*.wasm
+t/grpc_server_example/grpc_server_example
+t/plugin/grpc-web/grpc-web-server
+t/plugin/grpc-web/node_modules/
+pack
+pack-v*-linux.tgz*
+t/node_modules/
+
 # release tar package
 *.tgz
+release/*
+
+
+# files produced when running the test suite locally; never commit these
+# redis snapshot from a locally run redis-server (limit-* tests)
+dump.rdb
+# redis persistence dirs from the docker-compose redis services (--appendonly yes)
+/data/
+# telemetry dumped by the otel collector during tests
+ci/pod/otelcol-contrib/data-otlp.json
+# bytecode from importing the .py test drivers
+t/plugin/__pycache__/

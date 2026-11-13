@@ -20,6 +20,14 @@ repeat_each(2);
 no_long_string();
 no_root_location();
 
+add_block_preprocessor(sub {
+    my ($block) = @_;
+
+    if (!$block->request) {
+        $block->set_value("request", "GET /t");
+    }
+});
+
 run_tests;
 
 __DATA__
@@ -37,13 +45,9 @@ __DATA__
             ngx.say("data: ", data.test)
         }
     }
---- request
-GET /t
 --- response_body
 encode: {"test":"test"}
 data: test
---- no_error_log
-[error]
 
 
 
@@ -52,23 +56,11 @@ data: test
     location /t {
         content_by_lua_block {
             local core = require("apisix.core")
-            local data1 = core.json.delay_encode({test="test1"})
-            local data2 = core.json.delay_encode({test="test2"})
-
-            ngx.say("delay encode: ", data1 == data2)
-            ngx.say("data1 type: ", type(data1))
-            ngx.log(ngx.ERR, "data1 val: ", data1)
-            ngx.log(ngx.ERR, "data2 val: ", data2)
+            ngx.log(ngx.ERR, "val: ", core.json.delay_encode({test="test1"}),core.json.delay_encode({test="test2"}))
         }
     }
---- request
-GET /t
---- response_body
-delay encode: true
-data1 type: table
 --- error_log
-data1 val: {"test":"test2"}
-data2 val: {"test":"test2"}
+val: {"test":"test1"}{"test":"test2"}
 
 
 
@@ -82,12 +74,8 @@ data2 val: {"test":"test2"}
             ngx.say("encode: ", data)
         }
     }
---- request
-GET /t
 --- response_body_like eval
 qr/\{("test":"test","fun":"function: 0x[0-9a-f]+"|"fun":"function: 0x[0-9a-f]+","test":"test")}/
---- no_error_log
-[error]
 
 
 
@@ -103,12 +91,8 @@ qr/\{("test":"test","fun":"function: 0x[0-9a-f]+"|"fun":"function: 0x[0-9a-f]+",
             ngx.say("encode: ", json_data)
         }
     }
---- request
-GET /t
 --- response_body_like eval
 qr/encode: \{"test":"cdata\<char \*\[1\]>: 0x[0-9a-f]+"\}/
---- no_error_log
-[error]
 
 
 
@@ -126,9 +110,134 @@ qr/encode: \{"test":"cdata\<char \*\[1\]>: 0x[0-9a-f]+"\}/
             ngx.say("encode: ", json_data)
         }
     }
---- request
-GET /t
 --- response_body eval
 qr/\{"b":\{"a":\{"b":"table: 0x[\w]+"\}\}\}/
---- no_error_log
-[error]
+
+
+
+=== TEST 6: decode/encode empty array
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            local data = core.json.decode('{"arr":[]}')
+            ngx.say(core.json.encode(data))
+            local data = { arr = setmetatable({}, core.json.array_mt)}
+            ngx.say(core.json.encode(data))
+            local data = core.json.decode('{"obj":{}}')
+            ngx.say(core.json.encode(data))
+        }
+    }
+--- response_body
+{"arr":[]}
+{"arr":[]}
+{"obj":{}}
+
+
+
+=== TEST 7: encode slash without escape
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            local json_data = core.json.encode({test="/test"})
+
+            ngx.say("encode: ", json_data)
+
+            local data = core.json.decode(json_data)
+            ngx.say("data: ", data.test)
+        }
+    }
+--- response_body
+encode: {"test":"/test"}
+data: /test
+
+
+
+=== TEST 8: decode with null_as_nil option
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+
+            -- without null_as_nil: cjson.null is preserved
+            local data = core.json.decode('{"a": null, "b": {"c": null, "d": 1}}')
+            ngx.say("without opt, a is nil: ", data.a == nil)
+            ngx.say("without opt, a is null: ", data.a == core.json.null)
+
+            -- with null_as_nil: cjson.null becomes nil
+            local data2 = core.json.decode(
+                '{"a": null, "b": {"c": null, "d": 1}, "e": "text"}',
+                { null_as_nil = true }
+            )
+            ngx.say("a: ", data2.a)
+            ngx.say("b.c: ", data2.b.c)
+            ngx.say("b.d: ", data2.b.d)
+            ngx.say("e: ", data2.e)
+
+            -- verify the or-default pattern works after stripping
+            local val = data2.a or "default"
+            ngx.say("a or default: ", val)
+
+            -- top-level null becomes nil
+            local data3 = core.json.decode('null', { null_as_nil = true })
+            ngx.say("top-level null: ", data3)
+        }
+    }
+--- response_body
+without opt, a is nil: false
+without opt, a is null: true
+a: nil
+b.c: nil
+b.d: 1
+e: text
+a or default: default
+top-level null: nil
+
+
+
+=== TEST 9: cjson instances created by dependencies keep empty arrays as arrays
+--- config
+    location /t {
+        content_by_lua_block {
+            -- a dependency that keeps a private instance, e.g. lua-resty-session
+            local safe_instance = require("cjson.safe").new()
+            ngx.say("cjson.safe instance: ",
+                    safe_instance.encode(safe_instance.decode('{"arr":[]}')))
+
+            local instance = require("cjson").new()
+            ngx.say("cjson instance: ", instance.encode(instance.decode('{"arr":[]}')))
+
+            -- the plain singleton is a separate config from cjson.safe
+            local cjson = require("cjson")
+            ngx.say("cjson singleton: ", cjson.encode(cjson.decode('{"arr":[]}')))
+        }
+    }
+--- response_body
+cjson.safe instance: {"arr":[]}
+cjson instance: {"arr":[]}
+cjson singleton: {"arr":[]}
+
+
+
+=== TEST 10: cjson instances created by dependencies do not escape forward slashes
+--- config
+    location /t {
+        content_by_lua_block {
+            -- today the bundled lua-cjson keeps a shared escape table, so this
+            -- already holds; the patch pins it for when the option becomes
+            -- per-instance upstream
+            local safe_instance = require("cjson.safe").new()
+            ngx.say("cjson.safe instance: ", safe_instance.encode({uri = "/a/b"}))
+
+            local instance = require("cjson").new()
+            ngx.say("cjson instance: ", instance.encode({uri = "/a/b"}))
+
+            local cjson = require("cjson")
+            ngx.say("cjson singleton: ", cjson.encode({uri = "/a/b"}))
+        }
+    }
+--- response_body
+cjson.safe instance: {"uri":"/a/b"}
+cjson instance: {"uri":"/a/b"}
+cjson singleton: {"uri":"/a/b"}

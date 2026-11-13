@@ -87,8 +87,6 @@ __DATA__
 GET /t
 --- response_body
 done
---- no_error_log
-[error]
 
 
 
@@ -108,10 +106,8 @@ done
 --- request
 GET /t
 --- response_body
-property "burst" is required
+value should match only one schema, but matches none
 done
---- no_error_log
-[error]
 
 
 
@@ -139,30 +135,6 @@ done
                             "type": "roundrobin"
                         },
                         "uri": "/limit_conn"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                                "limit-conn": {
-                                    "conn": 100,
-                                    "burst": 50,
-                                    "default_conn_delay": 0.1,
-                                    "rejected_code": 503,
-                                    "key": "remote_addr"
-                                }
-                            },
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1980": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "uri": "/limit_conn"
-                        },
-                        "key": "/apisix/routes/1"
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -176,8 +148,6 @@ done
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -196,8 +166,6 @@ GET /test_concurrency
 200
 200
 200
---- no_error_log
-[error]
 
 
 
@@ -225,30 +193,6 @@ GET /test_concurrency
                             "type": "roundrobin"
                         },
                         "uri": "/limit_conn"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                                "limit-conn": {
-                                    "conn": 2,
-                                    "burst": 1,
-                                    "default_conn_delay": 0.1,
-                                    "rejected_code": 503,
-                                    "key": "remote_addr"
-                                }
-                            },
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1980": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "uri": "/limit_conn"
-                        },
-                        "key": "/apisix/routes/1"
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -262,8 +206,6 @@ GET /test_concurrency
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -282,8 +224,6 @@ GET /test_concurrency
 503
 503
 503
---- no_error_log
-[error]
 
 
 
@@ -324,8 +264,6 @@ GET /test_concurrency
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -344,8 +282,6 @@ GET /test_concurrency
 503
 503
 503
---- no_error_log
-[error]
 
 
 
@@ -385,9 +321,7 @@ GET /test_concurrency
 GET /t
 --- error_code: 400
 --- response_body
-{"error_msg":"failed to check the configuration of plugin limit-conn err: property \"conn\" is required"}
---- no_error_log
-[error]
+{"error_msg":"failed to check the configuration of plugin limit-conn err: value should match only one schema, but matches none"}
 
 
 
@@ -428,9 +362,7 @@ GET /t
 GET /t
 --- error_code: 400
 --- response_body
-{"error_msg":"failed to check the configuration of plugin limit-conn err: property \"conn\" validation failed: expected -1 to be sctrictly greater than 0"}
---- no_error_log
-[error]
+{"error_msg":"failed to check the configuration of plugin limit-conn err: property \"conn\" validation failed: value should match only one schema, but matches none"}
 
 
 
@@ -469,9 +401,7 @@ GET /t
 GET /t
 --- error_code: 400
 --- response_body
-{"error_msg":"failed to check the configuration of plugin limit-conn err: property \"conn\" is required"}
---- no_error_log
-[error]
+{"error_msg":"failed to check the configuration of plugin limit-conn err: value should match only one schema, but matches none"}
 
 
 
@@ -511,9 +441,7 @@ GET /t
 GET /t
 --- error_code: 400
 --- response_body
-{"error_msg":"failed to check the configuration of plugin limit-conn err: property \"conn\" validation failed: expected -1 to be sctrictly greater than 0"}
---- no_error_log
-[error]
+{"error_msg":"failed to check the configuration of plugin limit-conn err: property \"conn\" validation failed: value should match only one schema, but matches none"}
 
 
 
@@ -547,8 +475,6 @@ GET /t
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -567,8 +493,6 @@ GET /test_concurrency
 200
 200
 200
---- no_error_log
-[error]
 
 
 
@@ -609,8 +533,6 @@ GET /test_concurrency
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -651,8 +573,6 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -702,8 +622,8 @@ GET /test_concurrency
 503
 503
 503
---- error_log
-limit key: 10.10.10.1route
+--- error_log eval
+qr/limit key: \/apisix\/routes\/1:\d+:10\.10\.10\.1/
 
 
 
@@ -744,8 +664,6 @@ limit key: 10.10.10.1route
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -795,8 +713,8 @@ GET /test_concurrency
 503
 503
 503
---- error_log
-limit key: 10.10.10.2route
+--- error_log eval
+qr/limit key: \/apisix\/routes\/1:\d+:10\.10\.10\.2/
 
 
 
@@ -823,26 +741,6 @@ limit key: 10.10.10.2route
                             "type": "roundrobin"
                         },
                         "uri": "/limit_conn"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                                "limit-conn": {
-                                    "rejected_code": 503
-                                }
-                            },
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1980": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "uri": "/limit_conn"
-                        },
-                        "key": "/apisix/routes/1"
-                    },
-                    "action": "set"
                 }]]
             )
 
@@ -856,8 +754,6 @@ limit key: 10.10.10.2route
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -890,8 +786,6 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -910,8 +804,6 @@ GET /test_concurrency
 503
 503
 503
---- no_error_log
-[error]
 
 
 
@@ -934,8 +826,6 @@ GET /test_concurrency
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -954,8 +844,6 @@ GET /test_concurrency
 200
 200
 200
---- no_error_log
-[error]
 
 
 
@@ -980,11 +868,9 @@ GET /test_concurrency
 --- request
 GET /t
 --- response_body
-property "conn" validation failed: expected 0 to be sctrictly greater than 0
-property "default_conn_delay" validation failed: expected 0 to be sctrictly greater than 0
+property "conn" validation failed: value should match only one schema, but matches none
+property "default_conn_delay" validation failed: expected 0 to be greater than 0
 done
---- no_error_log
-[error]
 
 
 
@@ -1014,8 +900,6 @@ done
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -1057,8 +941,6 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -1105,8 +987,8 @@ GET /test_concurrency
 200
 200
 200
---- error_log_like eval
-qr/limit key: consumer_jackroute&consumer\d+/
+--- error_log eval
+qr/limit key: \/apisix\/routes\/\d+:\d+:consumer_jack/
 
 
 
@@ -1148,8 +1030,6 @@ qr/limit key: consumer_jackroute&consumer\d+/
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -1196,8 +1076,8 @@ GET /test_concurrency
 503
 503
 503
---- error_log_like eval
-qr/limit key: consumer_jackroute&consumer\d+/
+--- error_log eval
+qr/limit key: \/apisix\/routes\/\d+:\d+:consumer_jack/
 
 
 
@@ -1221,10 +1101,8 @@ qr/limit key: consumer_jackroute&consumer\d+/
 --- request
 GET /t
 --- response_body
-property "burst" is required
+value should match only one schema, but matches none
 done
---- no_error_log
-[error]
 
 
 
@@ -1242,7 +1120,8 @@ done
                             "burst": 0,
                             "default_conn_delay": 0.3,
                             "rejected_code": 503,
-                            "key": "remote_addr"
+                            "key": "remote_addr",
+                            "allow_degradation": true
                         }
                     },
                     "upstream": {
@@ -1264,8 +1143,6 @@ done
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -1281,5 +1158,45 @@ passed
     200, 200, 200,
     200, 200, 200
 ]
---- no_error_log
-[error]
+
+
+
+=== TEST 34: invalid route: wrong allow_degradation
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "plugins": {
+                            "limit-conn": {
+                                    "conn": 1,
+                                    "burst": 1,
+                                    "default_conn_delay": 0.1,
+                                    "rejected_code": 503,
+                                    "key": "remote_addr",
+                                    "allow_degradation": "true1"
+                                }
+                        },
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1980": 1
+                            },
+                            "type": "roundrobin"
+                        },
+                        "uri": "/limit_conn"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.print(body)
+        }
+    }
+--- request
+GET /t
+--- error_code: 400
+--- response_body
+{"error_msg":"failed to check the configuration of plugin limit-conn err: property \"allow_degradation\" validation failed: wrong type: expected boolean, got string"}

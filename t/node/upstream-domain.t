@@ -53,8 +53,6 @@ __DATA__
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -81,8 +79,6 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -92,8 +88,6 @@ GET /not_found
 --- error_code: 404
 --- response_body
 {"error_msg":"404 Route Not Found"}
---- no_error_log
-[error]
 
 
 
@@ -102,8 +96,6 @@ GET /not_found
 GET /hello
 --- response_body
 hello world
---- no_error_log
-[error]
 --- error_log eval
 qr/dns resolver domain: foo.com to \d+.\d+.\d+.\d+/
 
@@ -118,7 +110,7 @@ qr/dns resolver domain: foo.com to \d+.\d+.\d+.\d+/
                 ngx.HTTP_PUT,
                 [[{
                     "nodes": {
-                        "httpbin.orgx:80": 0
+                        "test.comx:80": 0
                     },
                     "type": "roundrobin",
                     "desc": "new upstream"
@@ -135,8 +127,6 @@ qr/dns resolver domain: foo.com to \d+.\d+.\d+.\d+/
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -157,11 +147,11 @@ passed
 --- request
 GET /t
 --- response_body
-status: 500
-status: 500
+status: 503
+status: 503
 --- error_log
-failed to parse domain: httpbin.orgx
-failed to parse domain: httpbin.orgx
+failed to parse domain: test.comx
+failed to parse domain: test.comx
 --- timeout: 10
 
 
@@ -174,9 +164,7 @@ failed to parse domain: httpbin.orgx
 
             local t = require("lib.test_admin").test
             local code, body = t('/apisix/admin/routes/1',
-                ngx.HTTP_DELETE,
-                nil,
-                [[{"action": "delete"}]]
+                ngx.HTTP_DELETE
             )
 
             if code >= 300 then
@@ -189,8 +177,6 @@ failed to parse domain: httpbin.orgx
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -202,9 +188,7 @@ passed
 
             local t = require("lib.test_admin").test
             local code, body = t('/apisix/admin/upstreams/1',
-                ngx.HTTP_DELETE,
-                nil,
-                [[{"action": "delete"}]]
+                ngx.HTTP_DELETE
             )
 
             if code >= 300 then
@@ -217,8 +201,6 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -249,8 +231,6 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -279,8 +259,6 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -315,8 +293,6 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -325,7 +301,130 @@ passed
 GET /hello
 --- response_body
 hello world
---- no_error_log
-[error]
 --- error_log eval
 qr/dns resolver domain: foo.com to \d+.\d+.\d+.\d+/
+
+
+
+=== TEST 13: set route(with upstream)
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/upstreams/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "nodes": {
+                        "localhost:1981": 2,
+                        "127.0.0.1:1980": 1
+                    },
+                    "type": "roundrobin",
+                    "desc": "new upstream"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+                ngx.say(body)
+                return
+            end
+
+            local code, body = t('/apisix/admin/routes/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "uri": "/server_port",
+                    "service_id": "1",
+                    "upstream_id": "1"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 14: roundrobin
+--- config
+location /t {
+    content_by_lua_block {
+        local t = require("lib.test_admin").test
+        -- warmup request to trigger DNS resolution for domain-based node
+        t('/server_port', ngx.HTTP_GET)
+        ngx.sleep(0.1)
+
+        local count = {}
+        local unexpected = 0
+        for i = 1, 18 do
+            local code, _, body = t('/server_port', ngx.HTTP_GET)
+            if code ~= 200 or (body ~= "1980" and body ~= "1981") then
+                unexpected = unexpected + 1
+            else
+                count[body] = (count[body] or 0) + 1
+            end
+        end
+        local c1981 = count["1981"] or 0
+        local c1980 = count["1980"] or 0
+        -- weight ratio is 2:1 (1981:1980), expect ~12:6 out of 18
+        -- after DNS warmup, distribution should approximate 2:1
+        local ratio_ok = unexpected == 0
+            and math.abs(c1981 - 2 * c1980) <= 4
+            and c1980 >= 4
+        ngx.say(ratio_ok)
+    }
+}
+--- request
+GET /t
+--- response_body
+true
+
+
+
+=== TEST 15: set route(with upstream)
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "uri": "/hello",
+                    "upstream": {
+                        "nodes": {
+                            "foo.com.": 0,
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin",
+                        "desc": "new upstream"
+                    },
+                    "service_id": "1"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 16: hit routes, parse the domain of upstream node
+--- request
+GET /hello
+--- response_body
+hello world
+--- error_log eval
+qr/dns resolver domain: foo.com. to \d+.\d+.\d+.\d+/

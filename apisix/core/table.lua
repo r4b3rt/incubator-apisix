@@ -14,16 +14,26 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 --
+
+--- Wrapped table module.
+--
+-- @module core.table
+
 local newproxy     = newproxy
 local getmetatable = getmetatable
 local setmetatable = setmetatable
 local select       = select
+local tostring     = tostring
 local new_tab      = require("table.new")
 local nkeys        = require("table.nkeys")
 local ipairs       = ipairs
 local pairs        = pairs
 local type         = type
 local ngx_re       = require("ngx.re")
+local isarray      = require("table.isarray")
+local str_byte     = string.byte
+local str_has_prefix = require("apisix.core.string").has_prefix
+local DOT          = str_byte(".")
 
 
 local _M = {
@@ -36,6 +46,7 @@ local _M = {
     sort    = table.sort,
     clone   = require("table.clone"),
     isarray = require("table.isarray"),
+    isempty = require("table.isempty"),
 }
 
 
@@ -75,8 +86,21 @@ function _M.try_read_attr(tab, ...)
     return tab
 end
 
+---
+--  Test if an element exists in an array.
+--
+-- @function core.table.array_find
+-- @tparam table array The tested array.
+-- @tparam string val The tested value.
+-- @treturn number The index of tested value.
+-- @usage
+-- local arr = {"a", "b", "c"}
+-- local idx = core.table.array_find(arr, "b") -- idx = 2
+local function array_find(array, val)
+    if type(array) ~= "table" then
+        return nil
+    end
 
-function _M.array_find(array, val)
     for i, v in ipairs(array) do
         if v == val then
             return i
@@ -85,6 +109,7 @@ function _M.array_find(array, val)
 
     return nil
 end
+_M.array_find = array_find
 
 
 -- only work under lua51 or luajit
@@ -96,34 +121,81 @@ function _M.setmt__gc(t, mt)
 end
 
 
-local function deepcopy(orig)
-    local orig_type = type(orig)
-    if orig_type ~= 'table' then
-        return orig
+local deepcopy
+do
+    -- the members of `parent` are shallow-copied when `parent` is `prefix`
+    -- itself or one of its descendants. The match has to stop at a path
+    -- separator, otherwise a prefix like "self.value.plugins" would also
+    -- claim a sibling named "self.value.plugins2".
+    local function under_shallow_prefix(parent, prefix)
+        if not str_has_prefix(parent, prefix) then
+            return false
+        end
+
+        return #parent == #prefix or str_byte(parent, #prefix + 1) == DOT
     end
 
-    -- If the array-like table contains nil in the middle,
-    -- the len might be smaller than the expected.
-    -- But it doesn't affect the correctness.
-    local len = #orig
-    local copy = new_tab(len, nkeys(orig) - len)
-    for orig_key, orig_value in pairs(orig) do
-        copy[orig_key] = deepcopy(orig_value)
+    local function _deepcopy(orig, copied, parent, opts)
+        -- If the array-like table contains nil in the middle,
+        -- the len might be smaller than the expected.
+        -- But it doesn't affect the correctness.
+        local len = #orig
+        local copy = new_tab(len, nkeys(orig) - len)
+        -- prevent infinite loop when a field refers its parent
+        copied[orig] = copy
+        for orig_key, orig_value in pairs(orig) do
+            local path = parent .. "." .. tostring(orig_key)
+            if opts and (array_find(opts.shallows, path) or
+                (opts.shallow_prefix and
+                 under_shallow_prefix(parent, opts.shallow_prefix))) then
+                copy[orig_key] = orig_value
+            else
+                if type(orig_value) == "table" then
+                    if copied[orig_value] then
+                        copy[orig_key] = copied[orig_value]
+                    else
+                        copy[orig_key] = _deepcopy(orig_value, copied, path, opts)
+                    end
+                else
+                    copy[orig_key] = orig_value
+                end
+            end
+        end
+
+        local mt = getmetatable(orig)
+        if mt ~= nil then
+            setmetatable(copy, mt)
+        end
+
+        return copy
     end
 
-    return copy
+
+    local copied_recorder = {}
+
+    function deepcopy(orig, opts)
+        local orig_type = type(orig)
+        if orig_type ~= 'table' then
+            return orig
+        end
+
+        local res = _deepcopy(orig, copied_recorder, "self", opts)
+        _M.clear(copied_recorder)
+        return res
+    end
 end
 _M.deepcopy = deepcopy
+
 
 local ngx_null = ngx.null
 local function merge(origin, extend)
     for k,v in pairs(extend) do
         if type(v) == "table" then
             if type(origin[k] or false) == "table" then
-                if _M.nkeys(origin[k]) ~= #origin[k] then
-                    merge(origin[k] or {}, extend[k] or {})
-                else
+                if isarray(origin[k]) or isarray(v) then
                     origin[k] = v
+                else
+                    merge(origin[k] or {}, extend[k] or {})
                 end
             else
                 origin[k] = v

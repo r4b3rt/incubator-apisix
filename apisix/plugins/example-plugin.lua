@@ -38,14 +38,13 @@ local metadata_schema = {
         skey = {type = "string"},
     },
     required = {"ikey", "skey"},
-    additionalProperties = false,
 }
 
 local plugin_name = "example-plugin"
 
 local _M = {
     version = 0.1,
-    priority = 0,        -- TODO: add a type field, may be a good idea
+    priority = 0,
     name = plugin_name,
     schema = schema,
     metadata_schema = metadata_schema,
@@ -53,6 +52,9 @@ local _M = {
 
 
 function _M.check_schema(conf, schema_type)
+    if schema_type == core.schema.TYPE_METADATA then
+        return core.schema.check(metadata_schema, conf)
+    end
     return core.schema.check(schema, conf)
 end
 
@@ -66,14 +68,16 @@ function _M.init()
 end
 
 
-function _M.destory()
+function _M.destroy()
     -- call this function when plugin is unloaded
 end
 
 
 function _M.rewrite(conf, ctx)
     core.log.warn("plugin rewrite phase, conf: ", core.json.encode(conf))
-    -- core.log.warn(" ctx: ", core.json.encode(ctx, true))
+    core.log.warn("conf_type: ", ctx.conf_type)
+    core.log.warn("conf_id: ", ctx.conf_id)
+    core.log.warn("conf_version: ", ctx.conf_version)
 end
 
 
@@ -99,8 +103,56 @@ function _M.access(conf, ctx)
 
     local matched_route = ctx.matched_route
     upstream.set(ctx, up_conf.type .. "#route_" .. matched_route.value.id,
-                 ctx.conf_version, up_conf, matched_route)
+                 ctx.conf_version, up_conf)
     return
+end
+
+function _M.header_filter(conf, ctx)
+    core.log.warn("plugin header_filter phase, conf: ", core.json.encode(conf))
+end
+
+
+function _M.body_filter(conf, ctx)
+    core.log.warn("plugin body_filter phase, eof: ", ngx.arg[2],
+                  ", conf: ", core.json.encode(conf))
+end
+
+
+function _M.delayed_body_filter(conf, ctx)
+    core.log.warn("plugin delayed_body_filter phase, eof: ", ngx.arg[2],
+                  ", conf: ", core.json.encode(conf))
+end
+
+function _M.log(conf, ctx)
+    core.log.warn("plugin log phase, conf: ", core.json.encode(conf))
+end
+
+
+function _M.ws_handshake(conf, ctx)
+    core.log.warn("plugin ws_handshake phase, conf: ", core.json.encode(conf))
+end
+
+
+function _M.ws_client_frame(conf, ctx)
+    local frame = core.websocket.client.get_frame()
+    core.log.warn("plugin ws_client_frame phase, type: ", frame.type)
+    if frame.type == "text" and frame.payload then
+        core.websocket.client.set_frame_data(frame.payload .. "-client")
+    end
+end
+
+
+function _M.ws_upstream_frame(conf, ctx)
+    local frame = core.websocket.upstream.get_frame()
+    core.log.warn("plugin ws_upstream_frame phase, type: ", frame.type)
+    if frame.type == "text" and frame.payload then
+        core.websocket.upstream.set_frame_data(frame.payload .. "-upstream")
+    end
+end
+
+
+function _M.ws_close(conf, ctx)
+    core.log.warn("plugin ws_close phase, conf: ", core.json.encode(conf))
 end
 
 

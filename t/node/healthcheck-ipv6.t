@@ -24,17 +24,8 @@ BEGIN {
     }
 }
 
-use t::APISIX;
+use t::APISIX 'no_plan';
 
-my $travis_os_name = $ENV{TRAVIS_OS_NAME};
-if ((defined $travis_os_name) && $travis_os_name eq "linux") {
-    plan(skip_all =>
-      "skip under Travis CI inux environment which doesn't work well with IPv6");
-} else {
-    plan 'no_plan';
-}
-
-master_on();
 repeat_each(1);
 log_level('info');
 no_root_location();
@@ -103,6 +94,8 @@ qr/^.*?\[error\](?!.*process exiting).*/
 --- config
     location /t {
         content_by_lua_block {
+            ngx.sleep(3) -- wait for new workers replacement to complete
+
             local http = require "resty.http"
             local uri = "http://127.0.0.1:" .. ngx.var.server_port
                         .. "/server_port"
@@ -113,7 +106,7 @@ qr/^.*?\[error\](?!.*process exiting).*/
                 ngx.log(ngx.ERR, "It works")
             end
 
-            ngx.sleep(2.5)
+            ngx.sleep(3)
 
             local ports_count = {}
             for i = 1, 12 do

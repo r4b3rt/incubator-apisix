@@ -38,22 +38,11 @@ __DATA__
                         "@timestamp": "$time_iso8601",
                         "client_ip": "$remote_addr"
                     }
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "log_format": {
-                                "host": "$host",
-                                "@timestamp": "$time_iso8601",
-                                "client_ip": "$remote_addr"
-                            }
-                        }
-                    },
-                    "action": "set"
                 }]]
                 )
-
-            ngx.status = code
+            if code >=300 then
+                ngx.status = code
+            end
             ngx.say(body)
         }
     }
@@ -61,8 +50,6 @@ __DATA__
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -76,7 +63,7 @@ passed
                  [[{
                         "plugins": {
                             "http-logger": {
-                                "uri": "http://127.0.0.1:1980/log",
+                                "uri": "http://127.0.0.1:3001",
                                 "batch_max_size": 1,
                                 "max_retry_count": 1,
                                 "retry_delay": 2,
@@ -98,6 +85,13 @@ passed
             if code >= 300 then
                 ngx.status = code
             end
+
+            local code, _, body2 = t("/hello", "GET")
+            if code >= 300 then
+                ngx.status = code
+                ngx.say("fail")
+                return
+            end
             ngx.say(body)
         }
     }
@@ -105,21 +99,14 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 3: hit route and report http logger
---- request
-GET /hello
---- response_body
-hello world
---- wait: 0.5
---- no_error_log
-[error]
---- error_log eval
-qr/request log: \{.*route_id":"1".*\}/
+=== TEST 3: report http logger
+--- exec
+tail -n 1 ci/pod/vector/http.log
+--- response_body eval
+qr/.*route_id":"1".*/
 
 
 
@@ -133,7 +120,7 @@ qr/request log: \{.*route_id":"1".*\}/
                  [[{
                         "plugins": {
                             "http-logger": {
-                                "uri": "http://127.0.0.1:1980/log",
+                                "uri": "http://127.0.0.1:3001",
                                 "batch_max_size": 2,
                                 "max_retry_count": 1,
                                 "retry_delay": 2,
@@ -155,6 +142,13 @@ qr/request log: \{.*route_id":"1".*\}/
             if code >= 300 then
                 ngx.status = code
             end
+
+            local code, _, body2 = t("/hello", "GET")
+            if code >= 300 then
+                ngx.status = code
+                ngx.say("fail")
+                return
+            end
             ngx.say(body)
         }
     }
@@ -162,35 +156,14 @@ qr/request log: \{.*route_id":"1".*\}/
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 5: hit route and report http logger
---- config
-location /t {
-    content_by_lua_block {
-        local t = require("lib.test_admin").test
-
-        for i = 1, 2 do
-            t('/hello', ngx.HTTP_GET)
-        end
-
-        ngx.sleep(3)
-        ngx.say("done")
-    }
-}
---- request
-GET /t
---- error_code: 200
---- no_error_log
-[error]
---- grep_error_log eval
+=== TEST 5: report http logger
+--- exec
+tail -n 1 ci/pod/vector/http.log
+--- response_body eval
 qr/"\@timestamp":"20/
---- grep_error_log_out
-"@timestamp":"20
-"@timestamp":"20
 
 
 
@@ -204,7 +177,7 @@ qr/"\@timestamp":"20/
                  [[{
                         "plugins": {
                             "http-logger": {
-                                "uri": "http://127.0.0.1:1980/log",
+                                "uri": "http://127.0.0.1:3001",
                                 "batch_max_size": 1,
                                 "max_retry_count": 1,
                                 "retry_delay": 2,
@@ -226,6 +199,13 @@ qr/"\@timestamp":"20/
             if code >= 300 then
                 ngx.status = code
             end
+
+            local code, _, body2 = t("/hello", "GET")
+            if code >= 300 then
+                ngx.status = code
+                ngx.say("fail")
+                return
+            end
             ngx.say(body)
         }
     }
@@ -233,21 +213,14 @@ qr/"\@timestamp":"20/
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 7: hit route and report http logger
---- request
-GET /hello
---- response_body
-hello world
---- wait: 0.5
---- no_error_log
-[error]
---- error_log eval
-qr/request log: \{"\@timestamp":.*,"client_ip":"127.0.0.1","host":"localhost","route_id":"1"\}/
+=== TEST 7: report http logger
+--- exec
+tail -n 1 ci/pod/vector/http.log
+--- response_body eval
+qr/"route_id":"1"/
 
 
 
@@ -261,7 +234,7 @@ qr/request log: \{"\@timestamp":.*,"client_ip":"127.0.0.1","host":"localhost","r
                  [[{
                         "plugins": {
                             "http-logger": {
-                                "uri": "http://127.0.0.1:1980/log",
+                                "uri": "http://127.0.0.1:3001",
                                 "batch_max_size": 2,
                                 "max_retry_count": 1,
                                 "retry_delay": 2,
@@ -283,6 +256,20 @@ qr/request log: \{"\@timestamp":.*,"client_ip":"127.0.0.1","host":"localhost","r
             if code >= 300 then
                 ngx.status = code
             end
+
+            local code, _, body2 = t("/hello", "GET")
+            if code >= 300 then
+                ngx.status = code
+                ngx.say("fail")
+                return
+            end
+
+            local code, _, body2 = t("/hello", "GET")
+            if code >= 300 then
+                ngx.status = code
+                ngx.say("fail")
+                return
+            end
             ngx.say(body)
         }
     }
@@ -290,32 +277,14 @@ qr/request log: \{"\@timestamp":.*,"client_ip":"127.0.0.1","host":"localhost","r
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 9: hit route and report http logger
---- config
-location /t {
-    content_by_lua_block {
-        local t = require("lib.test_admin").test
-
-        for i = 1, 2 do
-            t('/hello', ngx.HTTP_GET)
-        end
-
-        ngx.sleep(3)
-        ngx.say("done")
-    }
-}
---- request
-GET /t
---- error_code: 200
---- no_error_log
-[error]
---- error_log eval
-qr/request log: \[\{"\@timestamp":".*","client_ip":"127.0.0.1","host":"127.0.0.1","route_id":"1"\},\{"\@timestamp":".*","client_ip":"127.0.0.1","host":"127.0.0.1","route_id":"1"\}\]/
+=== TEST 9: report http logger to confirm two json in array
+--- exec
+tail -n 1 ci/pod/vector/http.log
+--- response_body eval
+qr/\[\{.*?\},\{.*?\}\]/
 
 
 
@@ -339,8 +308,6 @@ qr/request log: \[\{"\@timestamp":".*","client_ip":"127.0.0.1","host":"127.0.0.1
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -362,5 +329,395 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
+
+
+
+=== TEST 12: check default log format
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/consumers/jack',
+                 ngx.HTTP_PUT,
+                [[{
+                    "username": "jack",
+                    "plugins": {
+                        "key-auth": {
+                            "key": "auth-one"
+                        }
+                    }
+                }]]
+                )
+
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "plugins": {
+                            "http-logger": {
+                                "uri": "http://127.0.0.1:3001",
+                                "batch_max_size": 1,
+                                "max_retry_count": 1,
+                                "retry_delay": 2,
+                                "buffer_duration": 2,
+                                "inactive_timeout": 2
+                            },
+                            "key-auth": {}
+                        },
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1982": 1
+                            },
+                            "type": "roundrobin"
+                        },
+                        "uri": "/hello"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+
+            local code, _, _ = t("/hello", "GET",null,null,{apikey = "auth-one"})
+            if code >= 300 then
+                ngx.status = code
+                ngx.say("fail")
+                return
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 13: check logs
+--- exec
+tail -n 1 ci/pod/vector/http.log
+--- response_body eval
+qr/"consumer":\{"username":"jack"\}/
+--- wait: 0.5
+
+
+
+=== TEST 14: multi level nested expr conditions
+--- config
+    location /t {
+        content_by_lua_block {
+            local plugin = require("apisix.plugins.http-logger")
+            local ok, err = plugin.check_schema({
+                 uri = "http://127.0.0.1",
+                 include_resp_body = true,
+                 include_resp_body_expr = {
+                    {"http_content_length", "<", 1024},
+                    {"http_content_type", "in", {"application/xml", "application/json", "text/plain", "text/xml"}}
+                 }
+            })
+            if not ok then
+                ngx.say(err)
+            end
+            ngx.say("done")
+        }
+    }
+--- request
+GET /t
+--- response_body
+done
+
+
+
+=== TEST 15: use custom variable in the logger
+--- extra_init_by_lua
+    local core = require "apisix.core"
+
+    core.ctx.register_var("a6_route_labels", function(ctx)
+        local route = ctx.matched_route and ctx.matched_route.value
+        if route and route.labels then
+            return route.labels
+        end
+        return nil
+    end)
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+
+            local code, body = t('/apisix/admin/plugin_metadata/http-logger',
+                ngx.HTTP_PUT,
+                [[{
+                    "log_format": {
+                        "host": "$host",
+                        "labels": "$a6_route_labels",
+                        "client_ip": "$remote_addr"
+                    }
+                }]]
+                )
+            if code >= 300 then
+                ngx.status = code
+                return body
+            end
+
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "plugins": {
+                            "http-logger": {
+                                "uri": "http://127.0.0.1:3001",
+                                "batch_max_size": 1,
+                                "concat_method": "json"
+                            }
+                        },
+                        "labels":{
+                            "key":"testvalue"
+                        },
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1982": 1
+                            },
+                            "type": "roundrobin"
+                        },
+                        "uri": "/hello"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+
+            local code, _, body2 = t("/hello", "GET")
+            if code >= 300 then
+                ngx.status = code
+                ngx.say("fail")
+                return
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 16: hit route and report http logger
+--- exec
+tail -n 1 ci/pod/vector/http.log
+--- response_body eval
+qr/.*testvalue.*/
+
+
+
+=== TEST 17: log format in plugin
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "plugins": {
+                            "http-logger": {
+                                "uri": "http://127.0.0.1:3001",
+                                "batch_max_size": 1,
+                                "max_retry_count": 1,
+                                "retry_delay": 2,
+                                "buffer_duration": 2,
+                                "inactive_timeout": 2,
+                                "concat_method": "new_line",
+                                "log_format": {
+                                    "x_ip": "$remote_addr"
+                                }
+                            }
+                        },
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1982": 1
+                            },
+                            "type": "roundrobin"
+                        },
+                        "uri": "/hello"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+
+            local code, _, body2 = t("/hello", "GET")
+            if code >= 300 then
+                ngx.status = code
+                ngx.say("fail")
+                return
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 18: hit route and report http logger
+--- exec
+tail -n 1 ci/pod/vector/http.log
+--- response_body eval
+qr/"x_ip":"127.0.0.1".*\}/
+
+
+
+=== TEST 19: nested log format in plugin
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "plugins": {
+                            "http-logger": {
+                                "uri": "http://127.0.0.1:3001",
+                                "batch_max_size": 1,
+                                "max_retry_count": 1,
+                                "retry_delay": 2,
+                                "buffer_duration": 2,
+                                "inactive_timeout": 2,
+                                "concat_method": "json",
+                                "log_format": {
+                                    "host": "$host",
+                                    "client_ip": "$remote_addr",
+                                    "request": {
+                                        "method": "$request_method",
+                                        "uri": "$request_uri",
+                                        "headers": {
+                                            "user_agent": "$http_user_agent"
+                                        }
+                                    },
+                                    "response": {
+                                        "status": "$status"
+                                    }
+                                }
+                            }
+                        },
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1982": 1
+                            },
+                            "type": "roundrobin"
+                        },
+                        "uri": "/hello"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+
+            local code, _, body2 = t("/hello", "GET")
+            if code >= 300 then
+                ngx.status = code
+                ngx.say("fail")
+                return
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 20: hit route and verify nested log format
+--- exec
+tail -n 1 ci/pod/vector/http.log
+--- response_body eval
+qr/"client_ip":"127\.0\.0\.1"/ and
+qr/"request":\{[^}]*"method":"GET"/ and
+qr/"request":\{[^}]*"uri":"\/hello"/ and
+qr/"response":\{[^}]*"status":200/ and
+qr/"host":"127\.0\.0\.1"/
+
+
+
+=== TEST 21: deep nested log_format is truncated and warns
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            local t = require("lib.test_admin").test
+            -- configure deep nested log_format for http-logger
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "plugins": {
+                            "http-logger": {
+                                "uri": "http://127.0.0.1:3001",
+                                "batch_max_size": 1,
+                                "max_retry_count": 1,
+                                "retry_delay": 1,
+                                "buffer_duration": 1,
+                                "inactive_timeout": 1,
+                                "concat_method": "json",
+                                "log_format": {
+                                    "a": {"b": {"c": {"d": {"e": {"f": {"g": "$host"}}}}}}
+                                }
+                            }
+                        },
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1982": 1
+                            },
+                            "type": "roundrobin"
+                        },
+                        "uri": "/hello"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+                ngx.say(body)
+                return
+            end
+
+            -- trigger logging
+            local code2 = t("/hello", ngx.HTTP_GET)
+
+            -- wait for the batch processor to flush the log entry
+            ngx.sleep(1.1)
+
+            -- read last log line from vector http log
+            local fd, err = io.open("ci/pod/vector/http.log", 'r')
+            if not fd then
+                core.log.error("failed to open file: ci/pod/vector/http.log, error info: ", err)
+                return
+            end
+
+            local last
+            for line in fd:lines() do
+                last = line
+            end
+            fd:close()
+
+            local has_chain = last and last:find('"a"%s*:%s*%{"b"%s*:%s*%{"c"%s*:%s*%{"d"%s*:%s*%{"e"%s*:%s*%{')
+            local has_f = last and last:find('\"f\"%s*:')
+
+            if has_chain and not has_f then
+                ngx.status = code2
+                ngx.say("http depth limit enforced")
+            else
+                ngx.say("http depth limit not enforced")
+            end
+        }
+    }
+--- request
+GET /t
+--- response_body
+http depth limit enforced
+--- error_log
+log_format nesting exceeds max depth 5, truncating

@@ -22,6 +22,22 @@ worker_connections(256);
 no_root_location();
 no_shuffle();
 
+our $yaml_config = <<_EOC_;
+apisix:
+    node_listen: 1984
+    router:
+        http: 'radixtree_uri'
+_EOC_
+
+add_block_preprocessor(sub {
+    my ($block) = @_;
+
+    if (!defined $block->yaml_config) {
+        $block->set_value("yaml_config", $yaml_config);
+    }
+
+});
+
 run_tests();
 
 __DATA__
@@ -56,8 +72,6 @@ __DATA__
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -69,8 +83,6 @@ User-Agent: ios
 --- error_code: 404
 --- response_body
 {"error_msg":"404 Route Not Found"}
---- no_error_log
-[error]
 
 
 
@@ -81,8 +93,6 @@ GET /hello
 User-Agent: android
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
@@ -93,8 +103,6 @@ GET /hello
 User-Agent: Android
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
@@ -128,8 +136,6 @@ hello world
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -141,8 +147,6 @@ User-Agent: android
 --- error_code: 404
 --- response_body
 {"error_msg":"404 Route Not Found"}
---- no_error_log
-[error]
 
 
 
@@ -153,8 +157,6 @@ GET /hello
 User-Agent: ios
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
@@ -188,8 +190,6 @@ hello world
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -200,8 +200,6 @@ GET /hello
 User-Agent: ios
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
@@ -212,8 +210,6 @@ GET /hello
 User-Agent: android
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
@@ -247,8 +243,6 @@ hello world
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -260,8 +254,6 @@ User-Agent: android
 --- error_code: 404
 --- response_body
 {"error_msg":"404 Route Not Found"}
---- no_error_log
-[error]
 
 
 
@@ -270,8 +262,6 @@ User-Agent: android
 GET /hello
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
@@ -306,8 +296,6 @@ hello world
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -318,5 +306,134 @@ GET /hello
 User-Agent: ios
 --- response_body
 hello world
---- no_error_log
-[error]
+
+
+
+=== TEST 16: vars rule with logical operator (set)
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [=[{
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1980": 1
+                            },
+                            "type": "roundrobin"
+                        },
+                        "uri": "/hello",
+                        "vars": [
+                            "!OR",
+                            ["http_user_agent", "==", "ios"],
+                            ["http_demo", "==", "test"]
+                        ]
+                }]=]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 17: vars rule with logical operator (hit)
+--- request
+GET /hello
+--- more_headers
+User-Agent: android
+demo: prod
+--- response_body
+hello world
+
+
+
+=== TEST 18: vars rule with logical operator (miss)
+--- request
+GET /hello
+--- more_headers
+User-Agent: ios
+demo: prod
+--- error_code: 404
+
+
+
+=== TEST 19: be compatible with empty vars
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [=[{
+                        "methods": ["GET"],
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1980": 1
+                            },
+                            "type": "roundrobin"
+                        },
+                        "uri": "/hello",
+                        "vars": []
+                }]=]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 20: hit
+--- request
+GET /hello
+--- response_body
+hello world
+
+
+
+=== TEST 21: bad vars rule
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [=[{
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1980": 1
+                            },
+                            "type": "roundrobin"
+                        },
+                        "uri": "/hello",
+                        "vars": ["http_user_agent", "~*", "android"]
+                }]=]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.print(body)
+        }
+    }
+--- request
+GET /t
+--- error_code: 400
+--- response_body
+{"error_msg":"failed to validate the 'vars' expression: rule should be wrapped inside brackets"}

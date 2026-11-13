@@ -25,7 +25,6 @@ no_shuffle();
 our $yaml_config = <<_EOC_;
 apisix:
     node_listen: 1984
-    admin_key: null
     router:
         http: 'radixtree_uri_with_parameter'
 _EOC_
@@ -59,21 +58,18 @@ __DATA__
                     "uri": "/name/:name/bar"
                 }]],
                 [[{
-                    "node": {
-                        "value": {
-                            "uri": "/name/:name/bar",
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1980": 1
-                                },
-                                "type": "roundrobin"
-                            }
-                        },
-                        "key": "/apisix/routes/1"
+                    "value": {
+                        "uri": "/name/:name/bar",
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1980": 1
+                            },
+                            "type": "roundrobin"
+                        }
                     },
-                    "action": "set"
+                    "key": "/apisix/routes/1"
                 }]]
-                )
+            )
 
             if code >= 300 then
                 ngx.status = code
@@ -85,8 +81,6 @@ __DATA__
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -96,8 +90,6 @@ GET /not_found
 --- error_code: 404
 --- response_body
 {"error_msg":"404 Route Not Found"}
---- no_error_log
-[error]
 
 
 
@@ -107,8 +99,6 @@ GET /name/json2/foo
 --- error_code: 404
 --- response_body
 {"error_msg":"404 Route Not Found"}
---- no_error_log
-[error]
 
 
 
@@ -118,8 +108,6 @@ GET /name/json/
 --- error_code: 404
 --- response_body
 {"error_msg":"404 Route Not Found"}
---- no_error_log
-[error]
 
 
 
@@ -129,8 +117,6 @@ GET /name//bar
 --- error_code: 404
 --- response_body
 {"error_msg":"404 Route Not Found"}
---- no_error_log
-[error]
 
 
 
@@ -140,8 +126,6 @@ GET /name/json/bar
 --- error_code: 404
 --- response_body eval
 qr/404 Not Found/
---- no_error_log
-[error]
 
 
 
@@ -162,21 +146,18 @@ qr/404 Not Found/
                     "uri": "/:name/foo"
                 }]],
                 [[{
-                    "node": {
-                        "value": {
-                            "uri": "/:name/foo",
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1980": 1
-                                },
-                                "type": "roundrobin"
-                            }
-                        },
-                        "key": "/apisix/routes/1"
+                    "value": {
+                        "uri": "/:name/foo",
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1980": 1
+                            },
+                            "type": "roundrobin"
+                        }
                     },
-                    "action": "set"
+                    "key": "/apisix/routes/1"
                 }]]
-                )
+            )
 
             if code >= 300 then
                 ngx.status = code
@@ -188,8 +169,6 @@ qr/404 Not Found/
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -199,8 +178,6 @@ GET /json/foo
 --- error_code: 404
 --- response_body eval
 qr/404 Not Found/
---- no_error_log
-[error]
 
 
 
@@ -210,5 +187,86 @@ GET /json/bbb/foo
 --- error_code: 404
 --- response_body
 {"error_msg":"404 Route Not Found"}
---- no_error_log
-[error]
+
+
+
+=== TEST 10: inherit hosts from services
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/services/1',
+                ngx.HTTP_PUT,
+                [[{
+                        "hosts": ["bar.com"]
+                }]]
+            )
+
+            if code >= 300 then
+                ngx.status = code
+                ngx.say(body)
+                return
+            end
+
+            local code, body = t('/apisix/admin/routes/1',
+                ngx.HTTP_PUT,
+                [[{
+                        "methods": ["GET"],
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1980": 1
+                            },
+                            "type": "roundrobin"
+                        },
+                        "plugins": {
+                            "proxy-rewrite":{"uri":"/hello1"}
+                        },
+                        "service_id": "1",
+                        "uri": "/:name/hello"
+                }]]
+            )
+
+            if code >= 300 then
+                ngx.status = code
+                ngx.say(body)
+                return
+            end
+
+            local code, body = t('/apisix/admin/routes/2',
+                ngx.HTTP_PUT,
+                [[{
+                        "methods": ["GET"],
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1980": 1
+                            },
+                            "type": "roundrobin"
+                        },
+                        "plugins": {
+                            "proxy-rewrite":{"uri":"/hello"}
+                        },
+                        "uri": "/:name/hello",
+                        "priority": -1
+                }]]
+            )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 11: hit
+--- more_headers
+Host: www.foo.com
+--- request
+GET /john/hello
+--- response_body
+hello world

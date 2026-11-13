@@ -20,6 +20,15 @@ repeat_each(2);
 no_long_string();
 no_root_location();
 no_shuffle();
+
+add_block_preprocessor(sub {
+    my ($block) = @_;
+
+    if (!defined $block->request) {
+        $block->set_value("request", "GET /t");
+    }
+});
+
 run_tests;
 
 __DATA__
@@ -30,7 +39,7 @@ __DATA__
         content_by_lua_block {
             local plugin = require("apisix.plugins.jwt-auth")
             local core = require("apisix.core")
-            local conf = {key = "123"}
+            local conf = {key = "123", secret = "my-secret-key"}
 
             local ok, err = plugin.check_schema(conf, core.schema.TYPE_CONSUMER)
             if not ok then
@@ -40,12 +49,8 @@ __DATA__
             ngx.say(require("toolkit.json").encode(conf))
         }
     }
---- request
-GET /t
 --- response_body_like eval
-qr/{"algorithm":"HS256","base64_secret":false,"exp":86400,"key":"123","secret":"[a-zA-Z0-9+\\\/]+={0,2}"}/
---- no_error_log
-[error]
+qr/{"algorithm":"HS256","base64_secret":false,"exp":86400,"key":"123","lifetime_grace_period":0,"secret":"my-secret-key"}/
 
 
 
@@ -63,13 +68,9 @@ qr/{"algorithm":"HS256","base64_secret":false,"exp":86400,"key":"123","secret":"
             ngx.say("done")
         }
     }
---- request
-GET /t
 --- response_body
 property "key" validation failed: wrong type: expected string, got number
 done
---- no_error_log
-[error]
 
 
 
@@ -88,33 +89,17 @@ done
                             "secret": "my-secret-key"
                         }
                     }
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "username": "jack",
-                            "plugins": {
-                                "jwt-auth": {
-                                    "key": "user-key",
-                                    "secret": "my-secret-key"
-                                }
-                            }
-                        }
-                    },
-                    "action": "set"
                 }]]
                 )
 
-            ngx.status = code
+            if code >= 300 then
+                ngx.status = code
+            end
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -145,149 +130,96 @@ passed
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 5: sign / verify in argument
---- config
-    location /t {
-        content_by_lua_block {
-            local t = require("lib.test_admin").test
-            local code, err, sign = t('/apisix/plugin/jwt/sign?key=user-key',
-                ngx.HTTP_GET
-            )
-
-            if code > 200 then
-                ngx.status = code
-                ngx.say(err)
-                return
-            end
-
-            local code, _, res = t('/hello?jwt=' .. sign,
-                ngx.HTTP_GET
-            )
-
-            ngx.status = code
-            ngx.print(res)
-        }
-    }
---- request
-GET /t
---- response_body
-hello world
---- no_error_log
-[error]
-
-
-
-=== TEST 6: test for unsupported method
---- request
-PATCH /apisix/plugin/jwt/sign?key=user-key
---- error_code: 404
-
-
-
-=== TEST 7: verify, missing token
+=== TEST 5: verify, missing token
 --- request
 GET /hello
 --- error_code: 401
 --- response_body
 {"message":"Missing JWT token in request"}
---- no_error_log
-[error]
 
 
 
-=== TEST 8: verify: invalid JWT token
+=== TEST 6: verify: invalid JWT token
 --- request
 GET /hello?jwt=invalid-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJrZXkiOiJ1c2VyLWtleSIsImV4cCI6MTU2Mzg3MDUwMX0.pPNVvh-TQsdDzorRwa-uuiLYiEBODscp9wv0cwD6c68
 --- error_code: 401
 --- response_body
-{"message":"invalid header: invalid-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"}
---- no_error_log
-[error]
+{"message":"JWT token invalid"}
+--- error_log
+JWT token invalid: invalid header: invalid-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9
 
 
 
-=== TEST 9: verify: expired JWT token
+=== TEST 7: verify: expired JWT token
 --- request
 GET /hello?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJrZXkiOiJ1c2VyLWtleSIsImV4cCI6MTU2Mzg3MDUwMX0.pPNVvh-TQsdDzorRwa-uuiLYiEBODscp9wv0cwD6c68
 --- error_code: 401
 --- response_body
-{"message":"'exp' claim expired at Tue, 23 Jul 2019 08:28:21 GMT"}
---- no_error_log
-[error]
+{"message":"failed to verify jwt"}
+--- error_log
+failed to verify jwt: 'exp' claim expired at Tue, 23 Jul 2019 08:28:21 GMT
 
 
 
-=== TEST 10: verify (in header)
+=== TEST 8: verify (in header)
 --- request
 GET /hello
 --- more_headers
 Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJrZXkiOiJ1c2VyLWtleSIsImV4cCI6MTg3OTMxODU0MX0.fNtFJnNmJgzbiYmGB0Yjvm-l6A6M4jRV1l4mnVFSYjs
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
-=== TEST 11: verify (in cookie)
+=== TEST 9: verify (in cookie)
 --- request
 GET /hello
 --- more_headers
 Cookie: jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJrZXkiOiJ1c2VyLWtleSIsImV4cCI6MTg3OTMxODU0MX0.fNtFJnNmJgzbiYmGB0Yjvm-l6A6M4jRV1l4mnVFSYjs
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
-=== TEST 12: verify (in header without Bearer)
+=== TEST 10: verify (in header without Bearer)
 --- request
 GET /hello
 --- more_headers
 Authorization: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJrZXkiOiJ1c2VyLWtleSIsImV4cCI6MTg3OTMxODU0MX0.fNtFJnNmJgzbiYmGB0Yjvm-l6A6M4jRV1l4mnVFSYjs
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
-=== TEST 13: verify (header with bearer)
+=== TEST 11: verify (header with bearer)
 --- request
 GET /hello
 --- more_headers
 Authorization: bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJrZXkiOiJ1c2VyLWtleSIsImV4cCI6MTg3OTMxODU0MX0.fNtFJnNmJgzbiYmGB0Yjvm-l6A6M4jRV1l4mnVFSYjs
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
-=== TEST 14: verify (invalid bearer token)
+=== TEST 12: verify (invalid bearer token)
 --- request
 GET /hello
 --- more_headers
 Authorization: bearer invalid-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJrZXkiOiJ1c2VyLWtleSIsImV4cCI6MTg3OTMxODU0MX0.fNtFJnNmJgzbiYmGB0Yjvm-l6A6M4jRV1l4mnVFSYjs
 --- error_code: 401
 --- response_body
-{"message":"invalid header: invalid-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"}
---- no_error_log
-[error]
+{"message":"JWT token invalid"}
+--- error_log
+JWT token invalid: invalid header: invalid-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9
 
 
 
-=== TEST 15: delete a exist consumer
+=== TEST 13: delete a exist consumer
 --- config
     location /t {
         content_by_lua_block {
@@ -325,26 +257,16 @@ Authorization: bearer invalid-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJrZXkiOiJ1c
             code, body = t('/apisix/admin/consumers/jack',
                 ngx.HTTP_DELETE)
             ngx.say("code: ", code < 300, " body: ", body)
-
-            ngx.sleep(1)
-            code, body = t('/apisix/plugin/jwt/sign?key=chen-key',
-                ngx.HTTP_GET)
-            ngx.say("code: ", code < 300, " body: ", body)
         }
     }
---- request
-GET /t
 --- response_body
 code: true body: passed
 code: true body: passed
 code: true body: passed
-code: true body: passed
---- no_error_log
-[error]
 
 
 
-=== TEST 16: add consumer with username and plugins with base64 secret
+=== TEST 14: add consumer with username and plugins with base64 secret
 --- config
     location /t {
         content_by_lua_block {
@@ -360,37 +282,21 @@ code: true body: passed
                             "base64_secret": true
                         }
                     }
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "username": "jack",
-                            "plugins": {
-                                "jwt-auth": {
-                                    "key": "user-key",
-                                    "secret": "fo4XKdZ1xSrIZyms4q2BwPrW5lMpls9qqy5tiAk2esc=",
-                                    "base64_secret": true
-                                }
-                            }
-                        }
-                    },
-                    "action": "set"
                 }]]
                 )
-            ngx.status = code
+
+            if code >= 300 then
+                ngx.status = code
+            end
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 17: enable jwt auth plugin with base64 secret
+=== TEST 15: enable jwt auth plugin with base64 secret
 --- config
     location /t {
         content_by_lua_block {
@@ -416,30 +322,19 @@ passed
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 18: sign / verify
+=== TEST 16: sign / verify
 --- config
     location /t {
         content_by_lua_block {
             local t = require("lib.test_admin").test
-            local code, err, sign = t('/apisix/plugin/jwt/sign?key=user-key',
-                ngx.HTTP_GET
-            )
 
-            if code > 200 then
-                ngx.status = code
-                ngx.say(err)
-                return
-            end
-
+            -- sign is generated via https://jwt.io/#debugger-io. This is the case for all other test cases and is not specified further
+            local sign = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJrZXkiOiJ1c2VyLWtleSIsIm5iZiI6MTcyNzI3NDk4M30._Z8b_Asb2ROvGX4R5sNMbgJNQXB6x7aQeuVjmjY21Nw"
             local code, _, res = t('/hello?jwt=' .. sign,
                 ngx.HTTP_GET
             )
@@ -448,52 +343,46 @@ passed
             ngx.print(res)
         }
     }
---- request
-GET /t
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
-=== TEST 19: verify: invalid JWT token
+=== TEST 17: verify: invalid JWT token
 --- request
 GET /hello?jwt=invalid-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJrZXkiOiJ1c2VyLWtleSIsImV4cCI6MTU2Mzg3MDUwMX0.pPNVvh-TQsdDzorRwa-uuiLYiEBODscp9wv0cwD6c68
 --- error_code: 401
 --- response_body
-{"message":"invalid header: invalid-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"}
---- no_error_log
-[error]
+{"message":"JWT token invalid"}
+--- error_log
+JWT token invalid: invalid header: invalid-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9
 
 
 
-=== TEST 20: verify: invalid signature
+=== TEST 18: verify: invalid signature
 --- request
 GET /hello
 --- more_headers
 Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJrZXkiOiJ1c2VyLWtleSIsImV4cCI6MTg3OTMxODU0MX0.fNtFJnNmJgzbiYmGB0Yjvm-l6A6M4jRV1l4mnVFSYjs
 --- error_code: 401
 --- response_body
-{"message":"signature mismatch: fNtFJnNmJgzbiYmGB0Yjvm-l6A6M4jRV1l4mnVFSYjs"}
---- no_error_log
-[error]
+{"message":"failed to verify jwt"}
+--- error_log
+failed to verify jwt: signature mismatch: fNtFJnNmJgzbiYmGB0Yjvm-l6A6M4jRV1l4mnVFSYjs
 
 
 
-=== TEST 21: verify: happy path
+=== TEST 19: verify: happy path
 --- request
 GET /hello
 --- more_headers
 Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJrZXkiOiJ1c2VyLWtleSIsImV4cCI6MTg3OTMxODU0MX0._kNmXeH1uYVAvApFTONk2Z3Gh-a4XfGrjmqd_ahoOI0
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
-=== TEST 22: without key
+=== TEST 20: without key
 --- config
     location /t {
         content_by_lua_block {
@@ -508,55 +397,12 @@ hello world
             ngx.say("done")
         }
     }
---- request
-GET /t
 --- response_body
 property "key" is required
---- no_error_log
-[error]
 
 
 
-=== TEST 23: enable jwt auth plugin with extra field
---- config
-    location /t {
-        content_by_lua_block {
-            local t = require("lib.test_admin").test
-            local code, body = t('/apisix/admin/routes/1',
-                ngx.HTTP_PUT,
-                [[{
-                    "plugins": {
-                        "jwt-auth": {
-                            "key": "123"
-                        }
-                    },
-                    "upstream": {
-                        "nodes": {
-                            "127.0.0.1:1980": 1
-                        },
-                        "type": "roundrobin"
-                    },
-                    "uri": "/hello"
-                }]]
-                )
-
-            if code >= 300 then
-                ngx.status = code
-            end
-            ngx.say(body)
-        }
-    }
---- request
-GET /t
---- error_code: 400
---- response_body_like
-\{"error_msg":"failed to check the configuration of plugin jwt-auth err: additional properties forbidden, found key"\}
---- no_error_log
-[error]
-
-
-
-=== TEST 24: get the schema by schema_type
+=== TEST 21: get the schema by schema_type
 --- config
     location /t {
         content_by_lua_block {
@@ -564,21 +410,17 @@ GET /t
             local code, body, raw = t('/apisix/admin/schema/plugins/jwt-auth?schema_type=consumer',
                 ngx.HTTP_GET,
                 [[
-{"dependencies":{"algorithm":{"oneOf":[{"properties":{"algorithm":{"default":"HS256","enum":["HS256","HS512"]}}},{"required":["public_key","private_key"],"properties":{"algorithm":{"enum":["RS256"]},"public_key":{"type":"string"},"private_key":{"type":"string"}}}]}},"required":["key"],"type":"object","properties":{"base64_secret":{"default":false,"type":"boolean"},"secret":{"type":"string"},"algorithm":{"enum":["HS256","HS512","RS256"],"default":"HS256","type":"string"},"exp":{"minimum":1,"default":86400,"type":"integer"},"key":{"type":"string"}}}
+{"dependencies":{"algorithm":{"oneOf":[{"properties":{"algorithm":{"default":"HS256","enum":["HS256","HS512"]}}},{"required":["public_key"],"properties":{"algorithm":{"enum":["RS256","ES256"]},"public_key":{"type":"string"}}}]}},"required":["key"],"type":"object","properties":{"base64_secret":{"default":false,"type":"boolean"},"secret":{"type":"string"},"algorithm":{"enum":["HS256","HS512","RS256","ES256"],"default":"HS256","type":"string"},"exp":{"minimum":1,"default":86400,"type":"integer"},"key":{"type":"string"}}}
                 ]]
                 )
 
             ngx.status = code
         }
     }
---- request
-GET /t
---- no_error_log
-[error]
 
 
 
-=== TEST 25: get the schema by error schema_type
+=== TEST 22: get the schema by error schema_type
 --- config
     location /t {
         content_by_lua_block {
@@ -587,20 +429,16 @@ GET /t
                 ngx.HTTP_GET,
                 nil,
                 [[
-                {"properties":{"disable":{"type":"boolean"}},"additionalProperties":false,"type":"object"}
+                {"properties":{},"type":"object"}
                 ]]
                 )
             ngx.status = code
         }
     }
---- request
-GET /t
---- no_error_log
-[error]
 
 
 
-=== TEST 26: get the schema by default schema_type
+=== TEST 23: get the schema by default schema_type
 --- config
     location /t {
         content_by_lua_block {
@@ -609,20 +447,16 @@ GET /t
                 ngx.HTTP_GET,
                 nil,
                 [[
-                {"properties":{"disable":{"type":"boolean"}},"additionalProperties":false,"type":"object"}
+                {"properties":{},"type":"object"}
                 ]]
                 )
             ngx.status = code
         }
     }
---- request
-GET /t
---- no_error_log
-[error]
 
 
 
-=== TEST 27: add consumer with username and plugins with public_key, private_key(private_key numbits = 512)
+=== TEST 24: add consumer with username and plugins with public_key
 --- config
     location /t {
         content_by_lua_block {
@@ -635,42 +469,26 @@ GET /t
                         "jwt-auth": {
                             "key": "user-key-rs256",
                             "algorithm": "RS256",
-                            "public_key": "-----BEGIN PUBLIC KEY-----\nMFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBAKebDxlvQMGyEesAL1r1nIJBkSdqu3Hr\n7noq/0ukiZqVQLSJPMOv0oxQSutvvK3hoibwGakDOza+xRITB7cs2cECAwEAAQ==\n-----END PUBLIC KEY-----",
-                            "private_key": "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKebDxlvQMGyEesAL1r1nIJBkSdqu3Hr7noq/0ukiZqVQLSJPMOv\n0oxQSutvvK3hoibwGakDOza+xRITB7cs2cECAwEAAQJAYPWh6YvjwWobVYC45Hz7\n+pqlt1DWeVQMlN407HSWKjdH548ady46xiQuZ5Cfx3YyCcnsfVWaQNbC+jFbY4YL\nwQIhANfASwz8+2sKg1xtvzyaChX5S5XaQTB+azFImBJumixZAiEAxt93Td6JH1RF\nIeQmD/K+DClZMqSrliUzUqJnCPCzy6kCIAekDsRh/UF4ONjAJkKuLedDUfL3rNFb\n2M4BBSm58wnZAiEAwYLMOg8h6kQ7iMDRcI9I8diCHM8yz0SfbfbsvzxIFxECICXs\nYvIufaZvBa8f+E/9CANlVhm5wKAyM8N8GJsiCyEG\n-----END RSA PRIVATE KEY-----"
+                            "public_key": "-----BEGIN PUBLIC KEY-----\nMFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBAKebDxlvQMGyEesAL1r1nIJBkSdqu3Hr\n7noq/0ukiZqVQLSJPMOv0oxQSutvvK3hoibwGakDOza+xRITB7cs2cECAwEAAQ==\n-----END PUBLIC KEY-----"
                         }
                     }
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "username": "kerouac",
-                            "plugins": {
-                                "jwt-auth": {
-                                    "key": "user-key-rs256",
-                                    "algorithm": "RS256",
-                                    "public_key": "-----BEGIN PUBLIC KEY-----\nMFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBAKebDxlvQMGyEesAL1r1nIJBkSdqu3Hr\n7noq/0ukiZqVQLSJPMOv0oxQSutvvK3hoibwGakDOza+xRITB7cs2cECAwEAAQ==\n-----END PUBLIC KEY-----",
-                                    "private_key": "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKebDxlvQMGyEesAL1r1nIJBkSdqu3Hr7noq/0ukiZqVQLSJPMOv\n0oxQSutvvK3hoibwGakDOza+xRITB7cs2cECAwEAAQJAYPWh6YvjwWobVYC45Hz7\n+pqlt1DWeVQMlN407HSWKjdH548ady46xiQuZ5Cfx3YyCcnsfVWaQNbC+jFbY4YL\nwQIhANfASwz8+2sKg1xtvzyaChX5S5XaQTB+azFImBJumixZAiEAxt93Td6JH1RF\nIeQmD/K+DClZMqSrliUzUqJnCPCzy6kCIAekDsRh/UF4ONjAJkKuLedDUfL3rNFb\n2M4BBSm58wnZAiEAwYLMOg8h6kQ7iMDRcI9I8diCHM8yz0SfbfbsvzxIFxECICXs\nYvIufaZvBa8f+E/9CANlVhm5wKAyM8N8GJsiCyEG\n-----END RSA PRIVATE KEY-----"
-                                    }
-                            }
-                        }
-                    },
-                    "action": "set"
                 }]]
                 )
-            ngx.status = code
+
+            if code >= 300 then
+                ngx.status = code
+            end
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
+--- skip_eval
+1: $ENV{OPENSSL_FIPS} eq 'yes'
 
 
 
-=== TEST 28: JWT sign and verify use RS256 algorithm(private_key numbits = 512)
+=== TEST 25: JWT sign and verify use RS256 algorithm
 --- config
     location /t {
         content_by_lua_block {
@@ -697,30 +515,23 @@ passed
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
+--- skip_eval
+1: $ENV{OPENSSL_FIPS} eq 'yes'
 
 
 
-=== TEST 29: sign/verify use RS256 algorithm(private_key numbits = 512)
+=== TEST 26: sign/verify use RS256 algorithm(private_key numbits = 512)
 --- config
     location /t {
         content_by_lua_block {
             local t = require("lib.test_admin").test
-            local code, err, sign = t('/apisix/plugin/jwt/sign?key=user-key-rs256',
-                ngx.HTTP_GET
-            )
 
-            if code > 200 then
-                ngx.status = code
-                ngx.say(err)
-                return
-            end
+            -- the jwt signature is encoded with this private_key
+            -- private_key = "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKebDxlvQMGyEesAL1r1nIJBkSdqu3Hr7noq/0ukiZqVQLSJPMOv\n0oxQSutvvK3hoibwGakDOza+xRITB7cs2cECAwEAAQJAYPWh6YvjwWobVYC45Hz7\n+pqlt1DWeVQMlN407HSWKjdH548ady46xiQuZ5Cfx3YyCcnsfVWaQNbC+jFbY4YL\nwQIhANfASwz8+2sKg1xtvzyaChX5S5XaQTB+azFImBJumixZAiEAxt93Td6JH1RF\nIeQmD/K+DClZMqSrliUzUqJnCPCzy6kCIAekDsRh/UF4ONjAJkKuLedDUfL3rNFb\n2M4BBSm58wnZAiEAwYLMOg8h6kQ7iMDRcI9I8diCHM8yz0SfbfbsvzxIFxECICXs\nYvIufaZvBa8f+E/9CANlVhm5wKAyM8N8GJsiCyEG\n-----END RSA PRIVATE KEY-----"
 
+            local sign = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJrZXkiOiJ1c2VyLWtleS1yczI1NiIsIm5iZiI6MTcyNzI3NDk4M30.FaV6N-bWaSXkRrF2ec28hH5QENl-8I0LCONdNnQpB1YOb4akP-lKnwtABgfsQ_eKaEIf1PWNoghyByLejXaPbQ"
             local code, _, res = t('/hello?jwt=' .. sign,
                 ngx.HTTP_GET
             )
@@ -729,16 +540,14 @@ passed
             ngx.print(res)
         }
     }
---- request
-GET /t
 --- response_body
 hello world
---- no_error_log
-[error]
+--- skip_eval
+1: $ENV{OPENSSL_FIPS} eq 'yes'
 
 
 
-=== TEST 30: add consumer with username and plugins with public_key, private_key(private_key numbits = 1024)
+=== TEST 27: add consumer with username and plugins with public_key
 --- config
     location /t {
         content_by_lua_block {
@@ -751,45 +560,24 @@ hello world
                         "jwt-auth": {
                             "key": "user-key-rs256",
                             "algorithm": "RS256",
-                            "public_key": "-----BEGIN PUBLIC KEY-----\nMIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDGxOfVe/seP5T/V8pkS5YNAPRC\n3Ffxxedi7v0pyZh/4d4p9Qx0P9wOmALwlOq4Ftgks311pxG0zL0LcTJY4ikbc3r0\nh8SM0yhj9UV1VGtuia4YakobvpM9U+kq3lyIMO9ZPRez0cP3AJIYCt5yf8E7bNYJ\njbJNjl8WxvM1tDHqVQIDAQAB\n-----END PUBLIC KEY-----",
-                            ]] .. [[
-                            "private_key": "-----BEGIN RSA PRIVATE KEY-----\nMIICXQIBAAKBgQDGxOfVe/seP5T/V8pkS5YNAPRC3Ffxxedi7v0pyZh/4d4p9Qx0\nP9wOmALwlOq4Ftgks311pxG0zL0LcTJY4ikbc3r0h8SM0yhj9UV1VGtuia4Yakob\nvpM9U+kq3lyIMO9ZPRez0cP3AJIYCt5yf8E7bNYJjbJNjl8WxvM1tDHqVQIDAQAB\nAoGAYFy9eAXvLC7u8QuClzT9vbgksvVXvWKQVqo+GbAeOoEpz3V5YDJFYN3ZLwFC\n+ZQ5nTFXNV6Veu13CMEMA4NBIa8I4r3aYzSjq7X7UEBkLDBtEUge52mYakNfXD8D\nqViHkyJqvtVnBl7jNZVqbBderQnXA0kigaeZPL3+hkYKBgECQQDmiDbUL3FBynLy\nNX6/JdAbO4g1Nl/1RsGg8svhb6vRM8WQyIQWt5EKi7yoP/9nIRXcIgdwpVO6wZRU\nDojL0oy1AkEA3LpjqXxIRzcy2ALsqKN3hoNPGAlkPyG3Mlph91mqSZ2jYpXCX9LW\nhhQdf9GmfO8jZtYhYAJqEMOJrKeZHToLIQJBAJbrJbnTNTn05ztZehh5ELxDRPBR\nIJDaOXi8emyjRsA2PGiEXLTih7l3sZIUE4fYSQ9L18MO+LmScSB2Q2fr9uECQFc7\nIh/dCgN7ARD1Nun+kEIMqrlpHMEGZgv0RDsoqG+naOaRINwVysn6MR5OkGlXaLo/\nbbkvuxMc88/T/GLciYECQQC4oUveCOic4Qs6TQfMUKKv/kJ09slbD70HkcBzA5nY\nyro4RT4z/SN6T3SD+TuWn2//I5QxiQEIbOCTySci7yuh\n-----END RSA PRIVATE KEY-----"
+                            "public_key": "-----BEGIN PUBLIC KEY-----\nMIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDGxOfVe/seP5T/V8pkS5YNAPRC\n3Ffxxedi7v0pyZh/4d4p9Qx0P9wOmALwlOq4Ftgks311pxG0zL0LcTJY4ikbc3r0\nh8SM0yhj9UV1VGtuia4YakobvpM9U+kq3lyIMO9ZPRez0cP3AJIYCt5yf8E7bNYJ\njbJNjl8WxvM1tDHqVQIDAQAB\n-----END PUBLIC KEY-----"
                             }
                         }
                     }
-                ]],
-                [[{
-                    "node": {
-                        "value": {
-                            "username": "kerouac",
-                            "plugins": {
-                                "jwt-auth": {
-                                    "key": "user-key-rs256",
-                                    "algorithm": "RS256",
-                                    "public_key": "-----BEGIN PUBLIC KEY-----\nMIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDGxOfVe/seP5T/V8pkS5YNAPRC\n3Ffxxedi7v0pyZh/4d4p9Qx0P9wOmALwlOq4Ftgks311pxG0zL0LcTJY4ikbc3r0\nh8SM0yhj9UV1VGtuia4YakobvpM9U+kq3lyIMO9ZPRez0cP3AJIYCt5yf8E7bNYJ\njbJNjl8WxvM1tDHqVQIDAQAB\n-----END PUBLIC KEY-----",
-                                    ]] .. [[
-                                    "private_key": "-----BEGIN RSA PRIVATE KEY-----\nMIICXQIBAAKBgQDGxOfVe/seP5T/V8pkS5YNAPRC3Ffxxedi7v0pyZh/4d4p9Qx0\nP9wOmALwlOq4Ftgks311pxG0zL0LcTJY4ikbc3r0h8SM0yhj9UV1VGtuia4Yakob\nvpM9U+kq3lyIMO9ZPRez0cP3AJIYCt5yf8E7bNYJjbJNjl8WxvM1tDHqVQIDAQAB\nAoGAYFy9eAXvLC7u8QuClzT9vbgksvVXvWKQVqo+GbAeOoEpz3V5YDJFYN3ZLwFC\n+ZQ5nTFXNV6Veu13CMEMA4NBIa8I4r3aYzSjq7X7UEBkLDBtEUge52mYakNfXD8D\nqViHkyJqvtVnBl7jNZVqbBderQnXA0kigaeZPL3+hkYKBgECQQDmiDbUL3FBynLy\nNX6/JdAbO4g1Nl/1RsGg8svhb6vRM8WQyIQWt5EKi7yoP/9nIRXcIgdwpVO6wZRU\nDojL0oy1AkEA3LpjqXxIRzcy2ALsqKN3hoNPGAlkPyG3Mlph91mqSZ2jYpXCX9LW\nhhQdf9GmfO8jZtYhYAJqEMOJrKeZHToLIQJBAJbrJbnTNTn05ztZehh5ELxDRPBR\nIJDaOXi8emyjRsA2PGiEXLTih7l3sZIUE4fYSQ9L18MO+LmScSB2Q2fr9uECQFc7\nIh/dCgN7ARD1Nun+kEIMqrlpHMEGZgv0RDsoqG+naOaRINwVysn6MR5OkGlXaLo/\nbbkvuxMc88/T/GLciYECQQC4oUveCOic4Qs6TQfMUKKv/kJ09slbD70HkcBzA5nY\nyro4RT4z/SN6T3SD+TuWn2//I5QxiQEIbOCTySci7yuh\n-----END RSA PRIVATE KEY-----"
-                                }
-                            }
-                        }
-                    },
-                    "action": "set"
-                }]]
+                ]]
                 )
             ngx.status = code
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
+--- skip_eval
+1: $ENV{OPENSSL_FIPS} eq 'yes'
 
 
 
-=== TEST 31: JWT sign and verify use RS256 algorithm(private_key numbits = 1024)
+=== TEST 28: JWT sign and verify use RS256 algorithm
 --- config
     location /t {
         content_by_lua_block {
@@ -816,30 +604,23 @@ passed
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
+--- skip_eval
+1: $ENV{OPENSSL_FIPS} eq 'yes'
 
 
 
-=== TEST 32: sign/verify use RS256 algorithm(private_key numbits = 1024)
+=== TEST 29: sign/verify use RS256 algorithm(private_key numbits = 1024)
 --- config
     location /t {
         content_by_lua_block {
             local t = require("lib.test_admin").test
-            local code, err, sign = t('/apisix/plugin/jwt/sign?key=user-key-rs256',
-                ngx.HTTP_GET
-            )
 
-            if code > 200 then
-                ngx.status = code
-                ngx.say(err)
-                return
-            end
+            -- the jwt signature is encoded with this private_key
+            -- private_key = "-----BEGIN RSA PRIVATE KEY-----\nMIICXQIBAAKBgQDGxOfVe/seP5T/V8pkS5YNAPRC3Ffxxedi7v0pyZh/4d4p9Qx0\nP9wOmALwlOq4Ftgks311pxG0zL0LcTJY4ikbc3r0h8SM0yhj9UV1VGtuia4Yakob\nvpM9U+kq3lyIMO9ZPRez0cP3AJIYCt5yf8E7bNYJjbJNjl8WxvM1tDHqVQIDAQAB\nAoGAYFy9eAXvLC7u8QuClzT9vbgksvVXvWKQVqo+GbAeOoEpz3V5YDJFYN3ZLwFC\n+ZQ5nTFXNV6Veu13CMEMA4NBIa8I4r3aYzSjq7X7UEBkLDBtEUge52mYakNfXD8D\nqViHkyJqvtVnBl7jNZVqbBderQnXA0kigaeZPL3+hkYKBgECQQDmiDbUL3FBynLy\nNX6/JdAbO4g1Nl/1RsGg8svhb6vRM8WQyIQWt5EKi7yoP/9nIRXcIgdwpVO6wZRU\nDojL0oy1AkEA3LpjqXxIRzcy2ALsqKN3hoNPGAlkPyG3Mlph91mqSZ2jYpXCX9LW\nhhQdf9GmfO8jZtYhYAJqEMOJrKeZHToLIQJBAJbrJbnTNTn05ztZehh5ELxDRPBR\nIJDaOXi8emyjRsA2PGiEXLTih7l3sZIUE4fYSQ9L18MO+LmScSB2Q2fr9uECQFc7\nIh/dCgN7ARD1Nun+kEIMqrlpHMEGZgv0RDsoqG+naOaRINwVysn6MR5OkGlXaLo/\nbbkvuxMc88/T/GLciYECQQC4oUveCOic4Qs6TQfMUKKv/kJ09slbD70HkcBzA5nY\nyro4RT4z/SN6T3SD+TuWn2//I5QxiQEIbOCTySci7yuh\n-----END RSA PRIVATE KEY-----"
 
+            local sign = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJrZXkiOiJ1c2VyLWtleS1yczI1NiIsIm5iZiI6MTcyNzI3NDk4M30.FG-PAyscR-pFyw1a5ZiRxHLxzSI1jyVyZxm-fj3-u5igjacJY7UByCUKDnieV9-Ft81X15gdHAcrumUsTbu-77F50Bp5A1sxzdL_PXVLJ1cc8UP2ltvQwf1YWdutK7CI_uNLaeCYPZd9tWPhnfpsv4AdTdaCWeFyoaZSNOdw4oA"
             local code, _, res = t('/hello?jwt=' .. sign,
                 ngx.HTTP_GET
             )
@@ -848,16 +629,40 @@ passed
             ngx.print(res)
         }
     }
---- request
-GET /t
 --- response_body
 hello world
---- no_error_log
-[error]
+--- skip_eval
+1: $ENV{OPENSSL_FIPS} eq 'yes'
 
 
 
-=== TEST 33: add consumer with username and plugins with public_key, private_key(private_key numbits = 2048)
+=== TEST 30: sign/verify use RS256 algorithm(private_key numbits = 1024,with extra payload)
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+
+            -- the jwt signature is encoded with this private_key and payload
+            -- private_key = "-----BEGIN RSA PRIVATE KEY-----\nMIICXQIBAAKBgQDGxOfVe/seP5T/V8pkS5YNAPRC3Ffxxedi7v0pyZh/4d4p9Qx0\nP9wOmALwlOq4Ftgks311pxG0zL0LcTJY4ikbc3r0h8SM0yhj9UV1VGtuia4Yakob\nvpM9U+kq3lyIMO9ZPRez0cP3AJIYCt5yf8E7bNYJjbJNjl8WxvM1tDHqVQIDAQAB\nAoGAYFy9eAXvLC7u8QuClzT9vbgksvVXvWKQVqo+GbAeOoEpz3V5YDJFYN3ZLwFC\n+ZQ5nTFXNV6Veu13CMEMA4NBIa8I4r3aYzSjq7X7UEBkLDBtEUge52mYakNfXD8D\nqViHkyJqvtVnBl7jNZVqbBderQnXA0kigaeZPL3+hkYKBgECQQDmiDbUL3FBynLy\nNX6/JdAbO4g1Nl/1RsGg8svhb6vRM8WQyIQWt5EKi7yoP/9nIRXcIgdwpVO6wZRU\nDojL0oy1AkEA3LpjqXxIRzcy2ALsqKN3hoNPGAlkPyG3Mlph91mqSZ2jYpXCX9LW\nhhQdf9GmfO8jZtYhYAJqEMOJrKeZHToLIQJBAJbrJbnTNTn05ztZehh5ELxDRPBR\nIJDaOXi8emyjRsA2PGiEXLTih7l3sZIUE4fYSQ9L18MO+LmScSB2Q2fr9uECQFc7\nIh/dCgN7ARD1Nun+kEIMqrlpHMEGZgv0RDsoqG+naOaRINwVysn6MR5OkGlXaLo/\nbbkvuxMc88/T/GLciYECQQC4oUveCOic4Qs6TQfMUKKv/kJ09slbD70HkcBzA5nY\nyro4RT4z/SN6T3SD+TuWn2//I5QxiQEIbOCTySci7yuh\n-----END RSA PRIVATE KEY-----"
+            -- payload = {"aaa":"11","bb":"222"}
+
+            local sign = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJrZXkiOiJ1c2VyLWtleS1yczI1NiIsIm5iZiI6MTcyNzI3NDk4M30.FG-PAyscR-pFyw1a5ZiRxHLxzSI1jyVyZxm-fj3-u5igjacJY7UByCUKDnieV9-Ft81X15gdHAcrumUsTbu-77F50Bp5A1sxzdL_PXVLJ1cc8UP2ltvQwf1YWdutK7CI_uNLaeCYPZd9tWPhnfpsv4AdTdaCWeFyoaZSNOdw4oA"
+            local code, _, res = t('/hello?jwt=' .. sign,
+                ngx.HTTP_GET
+            )
+
+            ngx.status = code
+            ngx.print(res)
+        }
+    }
+--- response_body
+hello world
+--- skip_eval
+1: $ENV{OPENSSL_FIPS} eq 'yes'
+
+
+
+=== TEST 31: add consumer with username and plugins with public_key
 --- config
     location /t {
         content_by_lua_block {
@@ -870,45 +675,23 @@ hello world
                         "jwt-auth": {
                             "key": "user-key-rs256",
                             "algorithm": "RS256",
-                            "public_key": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAv5LHjZ4FxQ9jk6eQGDRt\noRwFVkLq+dUBebs97hrzirokVr2B+RoxqdLfKAM+AsN2DadawZ2GqlCV9DL0/gz6\nnWSqTQpWbQ8c7CrF31EkIHUYRzZvWy17K3WC9Odk/gM1FVd0HbZ2Rjuqj9ADeeqx\nnj9npDqKrMODOENy31SqZNerWZsdgGkML5JYbX5hbI2L9LREvRU21fDgSfGL6Mw4\nNaxnnzcvll4yqwrBELSeDZEAt0+e/p1dO7moxF+b1pFkh9vQl6zGvnvf8fOqn5Ex\ntLHXVzgx752PHMwmuj9mO1ko6p8FOM0JHDnooI+5rwK4j3I27Ho5nnatVWUaxK4U\n8wIDAQAB\n-----END PUBLIC KEY-----",
-                            ]] .. [[
-                            "private_key": "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAv5LHjZ4FxQ9jk6eQGDRtoRwFVkLq+dUBebs97hrzirokVr2B\n+RoxqdLfKAM+AsN2DadawZ2GqlCV9DL0/gz6nWSqTQpWbQ8c7CrF31EkIHUYRzZv\nWy17K3WC9Odk/gM1FVd0HbZ2Rjuqj9ADeeqxnj9npDqKrMODOENy31SqZNerWZsd\ngGkML5JYbX5hbI2L9LREvRU21fDgSfGL6Mw4Naxnnzcvll4yqwrBELSeDZEAt0+e\n/p1dO7moxF+b1pFkh9vQl6zGvnvf8fOqn5ExtLHXVzgx752PHMwmuj9mO1ko6p8F\nOM0JHDnooI+5rwK4j3I27Ho5nnatVWUaxK4U8wIDAQABAoIBAFsFQC73H8KrNyKW\ngI4fit77U0XS8ZXWMKdH4XrZ71DAdDeKPtC+M05+1GxMbhAeEl8WXraTQ8J0G2s1\nMtXqEMDrbUbBXKLghVtoTy91e/a369sZ7/qgN19Eq/30WzWdDIGhVZgwcy2Xd8hw\nitZIPi/z7ChJcE35bsUytseJkJPsWeMJNq4mLbHqMSBQWze/vNvIeGYr2xfqXc6H\nywGWGlk46RI28mOf7PecU0DxFoTBNcntZrpOwaIrTDsC7E6uNvhVbtsneseTlQuj\nihS7DAH72Zx3CXc9+SL3b5QNRD1Rnp+gKM6itjW1yduOj2dS0p8YzcUYNtxnw5Gv\nuLoHwuECgYEA58NhvnHn10YLBEMYxb30tDobdGfOjBSfih8K53+/SJhqF5mv4qZX\nUfw3o5R+CkkrhbZ24yst7wqKFYZ+LfazOqljOPOrBsgIIry/sXBlcbGLCw9MYFfB\nejKTt/xZjqLdDCcEbiSB0L2xNuyF/TZOu8V5Nu55LXKBqeW4yISQ5FkCgYEA05t1\n2cq8gE1jMfGXQNFIpUDG2j4wJXAPqnJZSUF/BICa55mH/HYRKoP2uTSvAnqNrdGt\nsnjnnMA7T+fGogB4STif1POWfj+BTKVa/qhUX9ytH6TeI4aqPXSZdTVEPRfR7bG1\nIB/j2lyPkiNi2VijMx33xqxIaQUUsvxIT95GSisCgYAdaJFylQmSK3UiaVEvZlcy\nt1zcfH+dDtDfueisT216TLzJmdrTq7/Qy2xT+Xe03mwDX4/ea5A8kN3MtXA1bOR5\nQR0yENlW1vMRVVoNrfFxZ9H46UwLvZbzZo+P/RlwHAJolFrfjwpZ7ngaPBEUfFup\nP/mNmt0Ng0YoxNmZuBiaoQKBgQCa2d4RRgpRvdAEYW41UbHetJuQZAfprarZKZrr\nP9HKoq45I6Je/qurOCzZ9ZLItpRtic6Zl16u2AHPhKZYMQ3VT2mvdZ5AvwpI44zG\nZLpx+FR8nrKsvsRf+q6+Ff/c0Uyfq/cHDi84wZmS8PBKa1Hqe1ix+6t1pvEx1eq4\n/8jiRwKBgGOZzt5H5P0v3cFG9EUPXtvf2k81GmZjlDWu1gu5yWSYpqCfYr/K/1Md\ndaQ/YCKTc12SYL7hZ2j+2/dGFXNXwknIyKNj76UxjUpJywWI5mUaXJZJDkLCRvxF\nkk9nWvPorpjjjxaIVN+TkGgDd/60at/tI6HxzZitVyla5rB8hoPm\n-----END RSA PRIVATE KEY-----"
+                            "public_key": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAv5LHjZ4FxQ9jk6eQGDRt\noRwFVkLq+dUBebs97hrzirokVr2B+RoxqdLfKAM+AsN2DadawZ2GqlCV9DL0/gz6\nnWSqTQpWbQ8c7CrF31EkIHUYRzZvWy17K3WC9Odk/gM1FVd0HbZ2Rjuqj9ADeeqx\nnj9npDqKrMODOENy31SqZNerWZsdgGkML5JYbX5hbI2L9LREvRU21fDgSfGL6Mw4\nNaxnnzcvll4yqwrBELSeDZEAt0+e/p1dO7moxF+b1pFkh9vQl6zGvnvf8fOqn5Ex\ntLHXVzgx752PHMwmuj9mO1ko6p8FOM0JHDnooI+5rwK4j3I27Ho5nnatVWUaxK4U\n8wIDAQAB\n-----END PUBLIC KEY-----"
                             }
                         }
                     }
-                ]],
-                [[{
-                    "node": {
-                        "value": {
-                            "username": "kerouac",
-                            "plugins": {
-                                "jwt-auth": {
-                                    "key": "user-key-rs256",
-                                    "algorithm": "RS256",
-                                    "public_key": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAv5LHjZ4FxQ9jk6eQGDRt\noRwFVkLq+dUBebs97hrzirokVr2B+RoxqdLfKAM+AsN2DadawZ2GqlCV9DL0/gz6\nnWSqTQpWbQ8c7CrF31EkIHUYRzZvWy17K3WC9Odk/gM1FVd0HbZ2Rjuqj9ADeeqx\nnj9npDqKrMODOENy31SqZNerWZsdgGkML5JYbX5hbI2L9LREvRU21fDgSfGL6Mw4\nNaxnnzcvll4yqwrBELSeDZEAt0+e/p1dO7moxF+b1pFkh9vQl6zGvnvf8fOqn5Ex\ntLHXVzgx752PHMwmuj9mO1ko6p8FOM0JHDnooI+5rwK4j3I27Ho5nnatVWUaxK4U\n8wIDAQAB\n-----END PUBLIC KEY-----",
-                                    ]] .. [[
-                                    "private_key": "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAv5LHjZ4FxQ9jk6eQGDRtoRwFVkLq+dUBebs97hrzirokVr2B\n+RoxqdLfKAM+AsN2DadawZ2GqlCV9DL0/gz6nWSqTQpWbQ8c7CrF31EkIHUYRzZv\nWy17K3WC9Odk/gM1FVd0HbZ2Rjuqj9ADeeqxnj9npDqKrMODOENy31SqZNerWZsd\ngGkML5JYbX5hbI2L9LREvRU21fDgSfGL6Mw4Naxnnzcvll4yqwrBELSeDZEAt0+e\n/p1dO7moxF+b1pFkh9vQl6zGvnvf8fOqn5ExtLHXVzgx752PHMwmuj9mO1ko6p8F\nOM0JHDnooI+5rwK4j3I27Ho5nnatVWUaxK4U8wIDAQABAoIBAFsFQC73H8KrNyKW\ngI4fit77U0XS8ZXWMKdH4XrZ71DAdDeKPtC+M05+1GxMbhAeEl8WXraTQ8J0G2s1\nMtXqEMDrbUbBXKLghVtoTy91e/a369sZ7/qgN19Eq/30WzWdDIGhVZgwcy2Xd8hw\nitZIPi/z7ChJcE35bsUytseJkJPsWeMJNq4mLbHqMSBQWze/vNvIeGYr2xfqXc6H\nywGWGlk46RI28mOf7PecU0DxFoTBNcntZrpOwaIrTDsC7E6uNvhVbtsneseTlQuj\nihS7DAH72Zx3CXc9+SL3b5QNRD1Rnp+gKM6itjW1yduOj2dS0p8YzcUYNtxnw5Gv\nuLoHwuECgYEA58NhvnHn10YLBEMYxb30tDobdGfOjBSfih8K53+/SJhqF5mv4qZX\nUfw3o5R+CkkrhbZ24yst7wqKFYZ+LfazOqljOPOrBsgIIry/sXBlcbGLCw9MYFfB\nejKTt/xZjqLdDCcEbiSB0L2xNuyF/TZOu8V5Nu55LXKBqeW4yISQ5FkCgYEA05t1\n2cq8gE1jMfGXQNFIpUDG2j4wJXAPqnJZSUF/BICa55mH/HYRKoP2uTSvAnqNrdGt\nsnjnnMA7T+fGogB4STif1POWfj+BTKVa/qhUX9ytH6TeI4aqPXSZdTVEPRfR7bG1\nIB/j2lyPkiNi2VijMx33xqxIaQUUsvxIT95GSisCgYAdaJFylQmSK3UiaVEvZlcy\nt1zcfH+dDtDfueisT216TLzJmdrTq7/Qy2xT+Xe03mwDX4/ea5A8kN3MtXA1bOR5\nQR0yENlW1vMRVVoNrfFxZ9H46UwLvZbzZo+P/RlwHAJolFrfjwpZ7ngaPBEUfFup\nP/mNmt0Ng0YoxNmZuBiaoQKBgQCa2d4RRgpRvdAEYW41UbHetJuQZAfprarZKZrr\nP9HKoq45I6Je/qurOCzZ9ZLItpRtic6Zl16u2AHPhKZYMQ3VT2mvdZ5AvwpI44zG\nZLpx+FR8nrKsvsRf+q6+Ff/c0Uyfq/cHDi84wZmS8PBKa1Hqe1ix+6t1pvEx1eq4\n/8jiRwKBgGOZzt5H5P0v3cFG9EUPXtvf2k81GmZjlDWu1gu5yWSYpqCfYr/K/1Md\ndaQ/YCKTc12SYL7hZ2j+2/dGFXNXwknIyKNj76UxjUpJywWI5mUaXJZJDkLCRvxF\nkk9nWvPorpjjjxaIVN+TkGgDd/60at/tI6HxzZitVyla5rB8hoPm\n-----END RSA PRIVATE KEY-----"
-                                }
-                            }
-                        }
-                    },
-                    "action": "set"
-                }]]
+                ]]
                 )
             ngx.status = code
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
+--- error_code_like: ^(?:200|201)?$
 
 
 
-=== TEST 34: JWT sign and verify use RS256 algorithm(private_key numbits = 2048)
+=== TEST 32: JWT sign and verify use RS256 algorithm(private_key numbits = 2048)
 --- config
     location /t {
         content_by_lua_block {
@@ -935,30 +718,21 @@ passed
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 35: sign/verify use RS256 algorithm(private_key numbits = 2048)
+=== TEST 33: sign/verify use RS256 algorithm(private_key numbits = 2048)
 --- config
     location /t {
         content_by_lua_block {
             local t = require("lib.test_admin").test
-            local code, err, sign = t('/apisix/plugin/jwt/sign?key=user-key-rs256',
-                ngx.HTTP_GET
-            )
 
-            if code > 200 then
-                ngx.status = code
-                ngx.say(err)
-                return
-            end
+            -- the jwt signature is encoded with this private_key
+            -- private_key = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAv5LHjZ4FxQ9jk6eQGDRtoRwFVkLq+dUBebs97hrzirokVr2B\n+RoxqdLfKAM+AsN2DadawZ2GqlCV9DL0/gz6nWSqTQpWbQ8c7CrF31EkIHUYRzZv\nWy17K3WC9Odk/gM1FVd0HbZ2Rjuqj9ADeeqxnj9npDqKrMODOENy31SqZNerWZsd\ngGkML5JYbX5hbI2L9LREvRU21fDgSfGL6Mw4Naxnnzcvll4yqwrBELSeDZEAt0+e\n/p1dO7moxF+b1pFkh9vQl6zGvnvf8fOqn5ExtLHXVzgx752PHMwmuj9mO1ko6p8F\nOM0JHDnooI+5rwK4j3I27Ho5nnatVWUaxK4U8wIDAQABAoIBAFsFQC73H8KrNyKW\ngI4fit77U0XS8ZXWMKdH4XrZ71DAdDeKPtC+M05+1GxMbhAeEl8WXraTQ8J0G2s1\nMtXqEMDrbUbBXKLghVtoTy91e/a369sZ7/qgN19Eq/30WzWdDIGhVZgwcy2Xd8hw\nitZIPi/z7ChJcE35bsUytseJkJPsWeMJNq4mLbHqMSBQWze/vNvIeGYr2xfqXc6H\nywGWGlk46RI28mOf7PecU0DxFoTBNcntZrpOwaIrTDsC7E6uNvhVbtsneseTlQuj\nihS7DAH72Zx3CXc9+SL3b5QNRD1Rnp+gKM6itjW1yduOj2dS0p8YzcUYNtxnw5Gv\nuLoHwuECgYEA58NhvnHn10YLBEMYxb30tDobdGfOjBSfih8K53+/SJhqF5mv4qZX\nUfw3o5R+CkkrhbZ24yst7wqKFYZ+LfazOqljOPOrBsgIIry/sXBlcbGLCw9MYFfB\nejKTt/xZjqLdDCcEbiSB0L2xNuyF/TZOu8V5Nu55LXKBqeW4yISQ5FkCgYEA05t1\n2cq8gE1jMfGXQNFIpUDG2j4wJXAPqnJZSUF/BICa55mH/HYRKoP2uTSvAnqNrdGt\nsnjnnMA7T+fGogB4STif1POWfj+BTKVa/qhUX9ytH6TeI4aqPXSZdTVEPRfR7bG1\nIB/j2lyPkiNi2VijMx33xqxIaQUUsvxIT95GSisCgYAdaJFylQmSK3UiaVEvZlcy\nt1zcfH+dDtDfueisT216TLzJmdrTq7/Qy2xT+Xe03mwDX4/ea5A8kN3MtXA1bOR5\nQR0yENlW1vMRVVoNrfFxZ9H46UwLvZbzZo+P/RlwHAJolFrfjwpZ7ngaPBEUfFup\nP/mNmt0Ng0YoxNmZuBiaoQKBgQCa2d4RRgpRvdAEYW41UbHetJuQZAfprarZKZrr\nP9HKoq45I6Je/qurOCzZ9ZLItpRtic6Zl16u2AHPhKZYMQ3VT2mvdZ5AvwpI44zG\nZLpx+FR8nrKsvsRf+q6+Ff/c0Uyfq/cHDi84wZmS8PBKa1Hqe1ix+6t1pvEx1eq4\n/8jiRwKBgGOZzt5H5P0v3cFG9EUPXtvf2k81GmZjlDWu1gu5yWSYpqCfYr/K/1Md\ndaQ/YCKTc12SYL7hZ2j+2/dGFXNXwknIyKNj76UxjUpJywWI5mUaXJZJDkLCRvxF\nkk9nWvPorpjjjxaIVN+TkGgDd/60at/tI6HxzZitVyla5rB8hoPm\n-----END RSA PRIVATE KEY-----"
 
+            local sign = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJrZXkiOiJ1c2VyLWtleS1yczI1NiIsIm5iZiI6MTcyNzI3NDk4M30.Zvp8dXefvGXrKgeoaNsA3sbV_3fw1w6Te7a0B_UANzef7gGJwvlnD6c3-f4yAy7GPgNzP_H1-atcF-sgLHAYpUa14XKe22a9S_BJSoQszoZuqGgpnGcjSzDMK9JX3FLUtzOFMQR5C4_3d7_z0NlepNo2xdQ6IQj0SvS1jrNwydpA9L89N07id3EO739uNw339g78N9QHP-j8nWItfbjo31xefCWTHtcloGkfaJOhcr06qmSbrivBU1AuPA8T3ZVumqw6fcRJzrvQJdKEfVyP-IPUtUy8SM1yLqstaKojJtU3A2HKaeb4fycwHXxtl52xhzIshr_I3iUhX_ak-z7m0A"
             local code, _, res = t('/hello?jwt=' .. sign,
                 ngx.HTTP_GET
             )
@@ -967,16 +741,36 @@ passed
             ngx.print(res)
         }
     }
---- request
-GET /t
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
-=== TEST 36: JWT sign with the public key when using the RS256 algorithm
+=== TEST 34: sign/verify use RS256 algorithm(private_key numbits = 2048,with extra payload)
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+
+            -- the jwt signature is encoded with this private_key and payload
+            -- private_key = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAv5LHjZ4FxQ9jk6eQGDRtoRwFVkLq+dUBebs97hrzirokVr2B\n+RoxqdLfKAM+AsN2DadawZ2GqlCV9DL0/gz6nWSqTQpWbQ8c7CrF31EkIHUYRzZv\nWy17K3WC9Odk/gM1FVd0HbZ2Rjuqj9ADeeqxnj9npDqKrMODOENy31SqZNerWZsd\ngGkML5JYbX5hbI2L9LREvRU21fDgSfGL6Mw4Naxnnzcvll4yqwrBELSeDZEAt0+e\n/p1dO7moxF+b1pFkh9vQl6zGvnvf8fOqn5ExtLHXVzgx752PHMwmuj9mO1ko6p8F\nOM0JHDnooI+5rwK4j3I27Ho5nnatVWUaxK4U8wIDAQABAoIBAFsFQC73H8KrNyKW\ngI4fit77U0XS8ZXWMKdH4XrZ71DAdDeKPtC+M05+1GxMbhAeEl8WXraTQ8J0G2s1\nMtXqEMDrbUbBXKLghVtoTy91e/a369sZ7/qgN19Eq/30WzWdDIGhVZgwcy2Xd8hw\nitZIPi/z7ChJcE35bsUytseJkJPsWeMJNq4mLbHqMSBQWze/vNvIeGYr2xfqXc6H\nywGWGlk46RI28mOf7PecU0DxFoTBNcntZrpOwaIrTDsC7E6uNvhVbtsneseTlQuj\nihS7DAH72Zx3CXc9+SL3b5QNRD1Rnp+gKM6itjW1yduOj2dS0p8YzcUYNtxnw5Gv\nuLoHwuECgYEA58NhvnHn10YLBEMYxb30tDobdGfOjBSfih8K53+/SJhqF5mv4qZX\nUfw3o5R+CkkrhbZ24yst7wqKFYZ+LfazOqljOPOrBsgIIry/sXBlcbGLCw9MYFfB\nejKTt/xZjqLdDCcEbiSB0L2xNuyF/TZOu8V5Nu55LXKBqeW4yISQ5FkCgYEA05t1\n2cq8gE1jMfGXQNFIpUDG2j4wJXAPqnJZSUF/BICa55mH/HYRKoP2uTSvAnqNrdGt\nsnjnnMA7T+fGogB4STif1POWfj+BTKVa/qhUX9ytH6TeI4aqPXSZdTVEPRfR7bG1\nIB/j2lyPkiNi2VijMx33xqxIaQUUsvxIT95GSisCgYAdaJFylQmSK3UiaVEvZlcy\nt1zcfH+dDtDfueisT216TLzJmdrTq7/Qy2xT+Xe03mwDX4/ea5A8kN3MtXA1bOR5\nQR0yENlW1vMRVVoNrfFxZ9H46UwLvZbzZo+P/RlwHAJolFrfjwpZ7ngaPBEUfFup\nP/mNmt0Ng0YoxNmZuBiaoQKBgQCa2d4RRgpRvdAEYW41UbHetJuQZAfprarZKZrr\nP9HKoq45I6Je/qurOCzZ9ZLItpRtic6Zl16u2AHPhKZYMQ3VT2mvdZ5AvwpI44zG\nZLpx+FR8nrKsvsRf+q6+Ff/c0Uyfq/cHDi84wZmS8PBKa1Hqe1ix+6t1pvEx1eq4\n/8jiRwKBgGOZzt5H5P0v3cFG9EUPXtvf2k81GmZjlDWu1gu5yWSYpqCfYr/K/1Md\ndaQ/YCKTc12SYL7hZ2j+2/dGFXNXwknIyKNj76UxjUpJywWI5mUaXJZJDkLCRvxF\nkk9nWvPorpjjjxaIVN+TkGgDd/60at/tI6HxzZitVyla5rB8hoPm\n-----END RSA PRIVATE KEY-----"
+            -- payload = {"aaa":"11","bb":"222"}
+
+            local sign = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJrZXkiOiJ1c2VyLWtleS1yczI1NiIsIm5iZiI6MTcyNzI3NDk4M30.Zvp8dXefvGXrKgeoaNsA3sbV_3fw1w6Te7a0B_UANzef7gGJwvlnD6c3-f4yAy7GPgNzP_H1-atcF-sgLHAYpUa14XKe22a9S_BJSoQszoZuqGgpnGcjSzDMK9JX3FLUtzOFMQR5C4_3d7_z0NlepNo2xdQ6IQj0SvS1jrNwydpA9L89N07id3EO739uNw339g78N9QHP-j8nWItfbjo31xefCWTHtcloGkfaJOhcr06qmSbrivBU1AuPA8T3ZVumqw6fcRJzrvQJdKEfVyP-IPUtUy8SM1yLqstaKojJtU3A2HKaeb4fycwHXxtl52xhzIshr_I3iUhX_ak-z7m0A"
+            local code, _, res = t('/hello?jwt=' .. sign,
+                ngx.HTTP_GET
+            )
+
+            ngx.status = code
+            ngx.print(res)
+        }
+    }
+--- response_body
+hello world
+
+
+
+=== TEST 35: JWT sign with the public key when using the RS256 algorithm
 --- config
     location /t {
         content_by_lua_block {
@@ -989,42 +783,21 @@ hello world
                         "jwt-auth": {
                             "key": "user-key-rs256",
                             "algorithm": "RS256",
-                            "private_key": "-----BEGIN PUBLIC KEY-----\nMFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBAKebDxlvQMGyEesAL1r1nIJBkSdqu3Hr\n7noq/0ukiZqVQLSJPMOv0oxQSutvvK3hoibwGakDOza+xRITB7cs2cECAwEAAQ==\n-----END PUBLIC KEY-----",
                             "public_key": "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKebDxlvQMGyEesAL1r1nIJBkSdqu3Hr7noq/0ukiZqVQLSJPMOv\n0oxQSutvvK3hoibwGakDOza+xRITB7cs2cECAwEAAQJAYPWh6YvjwWobVYC45Hz7\n+pqlt1DWeVQMlN407HSWKjdH548ady46xiQuZ5Cfx3YyCcnsfVWaQNbC+jFbY4YL\nwQIhANfASwz8+2sKg1xtvzyaChX5S5XaQTB+azFImBJumixZAiEAxt93Td6JH1RF\nIeQmD/K+DClZMqSrliUzUqJnCPCzy6kCIAekDsRh/UF4ONjAJkKuLedDUfL3rNFb\n2M4BBSm58wnZAiEAwYLMOg8h6kQ7iMDRcI9I8diCHM8yz0SfbfbsvzxIFxECICXs\nYvIufaZvBa8f+E/9CANlVhm5wKAyM8N8GJsiCyEG\n-----END RSA PRIVATE KEY-----"
                         }
                     }
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "username": "kerouac",
-                            "plugins": {
-                                "jwt-auth": {
-                                    "key": "user-key-rs256",
-                                    "algorithm": "RS256",
-                                    "private_key": "-----BEGIN PUBLIC KEY-----\nMFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBAKebDxlvQMGyEesAL1r1nIJBkSdqu3Hr\n7noq/0ukiZqVQLSJPMOv0oxQSutvvK3hoibwGakDOza+xRITB7cs2cECAwEAAQ==\n-----END PUBLIC KEY-----",
-                                    "public_key": "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKebDxlvQMGyEesAL1r1nIJBkSdqu3Hr7noq/0ukiZqVQLSJPMOv\n0oxQSutvvK3hoibwGakDOza+xRITB7cs2cECAwEAAQJAYPWh6YvjwWobVYC45Hz7\n+pqlt1DWeVQMlN407HSWKjdH548ady46xiQuZ5Cfx3YyCcnsfVWaQNbC+jFbY4YL\nwQIhANfASwz8+2sKg1xtvzyaChX5S5XaQTB+azFImBJumixZAiEAxt93Td6JH1RF\nIeQmD/K+DClZMqSrliUzUqJnCPCzy6kCIAekDsRh/UF4ONjAJkKuLedDUfL3rNFb\n2M4BBSm58wnZAiEAwYLMOg8h6kQ7iMDRcI9I8diCHM8yz0SfbfbsvzxIFxECICXs\nYvIufaZvBa8f+E/9CANlVhm5wKAyM8N8GJsiCyEG\n-----END RSA PRIVATE KEY-----"
-                                    }
-                            }
-                        }
-                    },
-                    "action": "set"
                 }]]
                 )
             ngx.status = code
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 37: JWT sign and verify RS256
+=== TEST 36: JWT sign and verify RS256
 --- config
     location /t {
         content_by_lua_block {
@@ -1051,31 +824,18 @@ passed
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 38: sign failed
---- request
-GET /apisix/plugin/jwt/sign?key=user-key-rs256
---- error_code: 500
---- response_body eval
-qr/failed to sign jwt/
-
-
-
-=== TEST 39: sanity(algorithm = HS512)
+=== TEST 37: sanity(algorithm = HS512)
 --- config
     location /t {
         content_by_lua_block {
             local plugin = require("apisix.plugins.jwt-auth")
             local core = require("apisix.core")
-            local conf = {key = "123", algorithm = "HS512"}
+            local conf = {key = "123", algorithm = "HS512", secret = "my-secret-key"}
 
             local ok, err = plugin.check_schema(conf, core.schema.TYPE_CONSUMER)
             if not ok then
@@ -1085,16 +845,12 @@ qr/failed to sign jwt/
             ngx.say(require("toolkit.json").encode(conf))
         }
     }
---- request
-GET /t
 --- response_body_like eval
-qr/{"algorithm":"HS512","base64_secret":false,"exp":86400,"key":"123","secret":"[a-zA-Z0-9+\\\/]+={0,2}"}/
---- no_error_log
-[error]
+qr/{"algorithm":"HS512","base64_secret":false,"exp":86400,"key":"123","lifetime_grace_period":0,"secret":"my-secret-key"}/
 
 
 
-=== TEST 40: add consumer with username and plugins use HS512 algorithm
+=== TEST 38: add consumer with username and plugins use HS512 algorithm
 --- config
     location /t {
         content_by_lua_block {
@@ -1110,21 +866,6 @@ qr/{"algorithm":"HS512","base64_secret":false,"exp":86400,"key":"123","secret":"
                             "secret": "my-secret-key"
                         }
                     }
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "username": "kerouac",
-                            "plugins": {
-                                "jwt-auth": {
-                                    "key": "user-key-HS512",
-                                    "algorithm": "HS512",
-                                    "secret": "my-secret-key"
-                                }
-                            }
-                        }
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -1132,16 +873,12 @@ qr/{"algorithm":"HS512","base64_secret":false,"exp":86400,"key":"123","secret":"
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 41: JWT sign and verify use HS512 algorithm
+=== TEST 39: JWT sign and verify use HS512 algorithm
 --- config
     location /t {
         content_by_lua_block {
@@ -1168,30 +905,18 @@ passed
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 42: sign / verify (algorithm = HS512)
+=== TEST 40: sign / verify (algorithm = HS512)
 --- config
     location /t {
         content_by_lua_block {
             local t = require("lib.test_admin").test
-            local code, err, sign = t('/apisix/plugin/jwt/sign?key=user-key-HS512',
-                ngx.HTTP_GET
-            )
 
-            if code > 200 then
-                ngx.status = code
-                ngx.say(err)
-                return
-            end
-
+            local sign = "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJrZXkiOiJ1c2VyLWtleS1IUzUxMiIsIm5iZiI6MTcyNzI3NDk4M30.emzmjIbFqkRAr55YW5YobdXDxYWiMuUNLPooE5G_bbme1ul19p1dKW7ESrlqvr4BPJRKThm4PnkNC4h9xSJpBQ"
             local code, _, res = t('/hello?jwt=' .. sign,
                 ngx.HTTP_GET
             )
@@ -1200,41 +925,35 @@ passed
             ngx.print(res)
         }
     }
---- request
-GET /t
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
-=== TEST 43: test for unsupported algorithm
---- request
-PATCH /apisix/plugin/jwt/sign?key=user-key
+=== TEST 41: sign / verify (algorithm = HS512,with extra payload)
 --- config
     location /t {
         content_by_lua_block {
-            local plugin = require("apisix.plugins.jwt-auth")
-            local core = require("apisix.core")
-            local conf = {key = "123", algorithm = "ES256"}
+            local t = require("lib.test_admin").test
 
-            local ok, err = plugin.check_schema(conf, core.schema.TYPE_CONSUMER)
-            if not ok then
-                ngx.say(err)
-            end
+            -- the jwt signature is encoded with this payload
+            -- payload = {"aaa":"11","bb":"222"}
 
-            ngx.say(require("toolkit.json").encode(conf))
+            local sign = "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJhYWEiOiIxMSIsImJiIjoiMjIyIiwia2V5IjoidXNlci1rZXktSFM1MTIiLCJuYmYiOjE3MjcyNzQ5ODN9.s6E3-wNJypgJL71MxoyTTHBDeqdrGQddFjkhLlh3ZN6IZwgpFRlFT1_8suQg9dWUDHGQqgejULyLPhmBMIbw2A"
+            local code, _, res = t('/hello?jwt=' .. sign,
+                ngx.HTTP_GET
+            )
+
+            ngx.status = code
+            ngx.print(res)
         }
     }
---- request
-GET /t
---- response_body_like eval
-qr/property "algorithm" validation failed/
+--- response_body
+hello world
 
 
 
-=== TEST 44: wrong format of secret
+=== TEST 42: wrong format of secret
 --- config
     location /t {
         content_by_lua_block {
@@ -1254,84 +973,35 @@ qr/property "algorithm" validation failed/
     }
 --- response_body
 base64_secret required but the secret is not in base64 format
---- no_error_log
-[error]
---- request
-GET /t
 
 
 
-=== TEST 45: when the exp value is not set, make sure the default value(86400) works
+=== TEST 43: when the exp value is not set, make sure the default value(86400) works
 --- config
     location /t {
         content_by_lua_block {
-            local t = require("lib.test_admin").test
-            local code, body, res_data = t('/apisix/admin/consumers',
-                ngx.HTTP_PUT,
-                [[{
-                    "username": "kerouac",
-                    "plugins": {
-                        "jwt-auth": {
-                            "key": "exp-not-set",
-                            "secret": "my-secret-key"
-                        }
-                    }
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "username": "kerouac",
-                            "plugins": {
-                                "jwt-auth": {
-                                    "key": "exp-not-set",
-                                    "secret": "my-secret-key"
-                                }
-                            }
-                        }
-                    },
-                    "action": "set"
-                }]]
-                )
+            local core = require("apisix.core")
+            local plugin = require("apisix.plugins.jwt-auth")
+            local conf = {
+                key = "exp-not-set",
+                secret = "my-secret-key"
+            }
+            local ok, err = plugin.check_schema(conf, core.schema.TYPE_CONSUMER)
 
-            ngx.status = code
-            ngx.say(require("toolkit.json").encode(res_data))
+            if not ok then
+                ngx.say(err)
+            else
+                assert(conf.exp == 86400, "exp should be 86400")
+                ngx.say("passed")
+            end
         }
     }
---- request
-GET /t
---- response_body_like eval
-qr/"exp":86400/
---- no_error_log
-[error]
-
-
-
-=== TEST 46: when the exp value is not set, sign jwt use the default value(86400)
---- config
-    location /t {
-        content_by_lua_block {
-            local t = require("lib.test_admin").test
-            local code, body, res_data = t('/apisix/plugin/jwt/sign?key=exp-not-set',
-                ngx.HTTP_GET)
-
-            local jwt = require("resty.jwt")
-            local jwt_obj = jwt:load_jwt(res_data)
-            local exp_in_jwt = jwt_obj.payload.exp
-            local ngx_time = ngx.time
-            local use_default_exp = ngx_time() + 86400 - 1 <= exp_in_jwt and exp_in_jwt <= ngx_time() + 86400
-            ngx.say(use_default_exp)
-        }
-    }
---- request
-GET /t
 --- response_body
-true
---- no_error_log
-[error]
+passed
 
 
 
-=== TEST 47: RS256 without public key
+=== TEST 44: RS256 without public key
 --- config
     location /t {
         content_by_lua_block {
@@ -1352,17 +1022,13 @@ true
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- error_code: 400
 --- response_body_like eval
 qr/failed to validate dependent schema for \\"algorithm\\"/
---- no_error_log
-[error]
 
 
 
-=== TEST 48: RS256 without private key
+=== TEST 45: RS256 without private key
 --- config
     location /t {
         content_by_lua_block {
@@ -1384,10 +1050,443 @@ qr/failed to validate dependent schema for \\"algorithm\\"/
             ngx.say(body)
         }
     }
---- request
-GET /t
+--- error_code: 200
+
+
+
+=== TEST 46: add consumer with username and plugins with public_key, private_key(ES256)
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/consumers',
+                ngx.HTTP_PUT,
+                [[{
+                    "username": "kerouac",
+                    "plugins": {
+                        "jwt-auth": {
+                            "key": "user-key-es256",
+                            "algorithm": "ES256",
+                            "public_key": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEEVs/o5+uQbTjL3chynL4wXgUg2R9\nq9UU8I5mEovUf86QZ7kOBIjJwqnzD1omageEHWwHdBO6B+dFabmdT9POxg==\n-----END PUBLIC KEY-----"
+                        }
+                    }
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- response_body
+passed
+
+
+
+=== TEST 47: JWT sign and verify use ES256 algorithm(private_key numbits = 512)
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "plugins": {
+                        "jwt-auth": {}
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uri": "/hello"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- response_body
+passed
+--- skip_eval
+1: $ENV{OPENSSL_FIPS} eq 'yes'
+
+
+
+=== TEST 48: sign/verify use ES256 algorithm(private_key numbits = 512)
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+
+            -- the jwt signature is encoded with this private_key
+            -- private_key = "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgevZzL1gdAFr88hb2\nOF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n1RTwjmYSi9R/zpBnuQ4EiMnCqfMPWiZqB4QdbAd0E7oH50VpuZ1P087G\n-----END PRIVATE KEY-----"
+
+            local sign = "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJrZXkiOiJ1c2VyLWtleS1lczI1NiIsIm5iZiI6MTcyNzI3NDk4M30.t-CZzJRSxIuVVjU3m8_zDtb7h9x2R2s3BJWmerh0hw-RMIklBqLJ3V9kYAWl7DIyXlp0jQCPDZ_M7mhr1Q3HPw"
+            local code, _, res = t('/hello?jwt=' .. sign,
+                ngx.HTTP_GET
+            )
+
+            ngx.status = code
+            ngx.print(res)
+        }
+    }
+--- response_body
+hello world
+--- skip_eval
+1: $ENV{OPENSSL_FIPS} eq 'yes'
+
+
+
+=== TEST 49: add consumer missing public_key (algorithm=RS256)
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/consumers',
+                ngx.HTTP_PUT,
+                [[{
+                    "username": "kerouac",
+                    "plugins": {
+                        "jwt-auth": {
+                            "key": "user-key-res256",
+                            "algorithm": "RS256"
+                        }
+                    }
+                }]]
+                )
+
+            ngx.status = code
+            ngx.print(body)
+        }
+    }
 --- error_code: 400
---- response_body_like eval
-qr/failed to validate dependent schema for \\"algorithm\\"/
+--- response_body
+{"error_msg":"invalid plugins configuration: failed to check the configuration of plugin jwt-auth err: failed to validate dependent schema for \"algorithm\": value should match only one schema, but matches none"}
+
+
+
+=== TEST 50: add consumer missing public_key (algorithm=ES256)
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/consumers',
+                ngx.HTTP_PUT,
+                [[{
+                    "username": "kerouac",
+                    "plugins": {
+                        "jwt-auth": {
+                            "key": "user-key-es256",
+                            "algorithm": "ES256"
+                        }
+                    }
+                }]]
+                )
+
+            ngx.status = code
+            ngx.print(body)
+        }
+    }
+--- error_code: 400
+--- response_body
+{"error_msg":"invalid plugins configuration: failed to check the configuration of plugin jwt-auth err: failed to validate dependent schema for \"algorithm\": value should match only one schema, but matches none"}
+
+
+
+=== TEST 51: secret is required when algorithm is not RS256 or ES256
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            local plugin = require("apisix.plugins.jwt-auth")
+            -- default algorithm is HS256
+            local ok, err = plugin.check_schema({
+                key = "123",
+            }, core.schema.TYPE_CONSUMER)
+            assert(not ok, "secret should be required when algorithm is HS256(default)")
+
+            ok, err = plugin.check_schema({
+                key = "123",
+                algorithm = "HS256",
+            }, core.schema.TYPE_CONSUMER)
+            assert(not ok, "secret should be required when algorithm is HS256")
+
+            ok, err = plugin.check_schema({
+                key = "123",
+                algorithm = "HS512",
+            }, core.schema.TYPE_CONSUMER)
+            assert(not ok, "secret should be required when algorithm is HS512")
+
+            ok, err = plugin.check_schema({
+                key = "123",
+                algorithm = "RS256",
+                public_key = "-----BEGIN PUBLIC KEY-----\nMFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBAKebDxlvQMGyEesAL1r1nIJBkSdqu3Hr\n7noq/0ukiZqVQLSJPMOv0oxQSutvvK3hoibwGakDOza+xRITB7cs2cECAwEAAQ==\n-----END PUBLIC KEY-----"
+            }, core.schema.TYPE_CONSUMER)
+            assert(ok, "secret should not be required when algorithm is RS256")
+
+            ok, err = plugin.check_schema({
+                key = "123",
+                algorithm = "ES256",
+                public_key = "-----BEGIN PUBLIC KEY-----\nMFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBAKebDxlvQMGyEesAL1r1nIJBkSdqu3Hr\n7noq/0ukiZqVQLSJPMOv0oxQSutvvK3hoibwGakDOza+xRITB7cs2cECAwEAAQ==\n-----END PUBLIC KEY-----"
+            }, core.schema.TYPE_CONSUMER)
+            assert(ok, "secret should not be required when algorithm is ES256")
+
+            ngx.say("passed")
+        }
+    }
+--- response_body
+passed
+
+
+
+=== TEST 52: HS256 token against RS256 consumer
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            -- Set up an RS256 consumer
+            local code, body = t('/apisix/admin/consumers',
+                ngx.HTTP_PUT,
+                [[{
+                    "username": "kerouac",
+                    "plugins": {
+                        "jwt-auth": {
+                            "key": "user-key-rs256",
+                            "algorithm": "RS256",
+                            "public_key": "-----BEGIN PUBLIC KEY-----\nMFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBAKebDxlvQMGyEesAL1r1nIJBkSdqu3Hr\n7noq/0ukiZqVQLSJPMOv0oxQSutvvK3hoibwGakDOza+xRITB7cs2cECAwEAAQ==\n-----END PUBLIC KEY-----"
+                        }
+                    }
+                }]]
+                )
+            assert(code < 300, body)
+
+            -- Set up a route with jwt-auth
+            code, body = t('/apisix/admin/routes/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "plugins": {
+                        "jwt-auth": {}
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uri": "/hello"
+                }]]
+                )
+            assert(code < 300, body)
+
+            -- This JWT has alg=HS256 in the header but targets the RS256 consumer
+            -- (key claim = "user-key-rs256"). It is HMAC-signed with the consumer's
+            -- public key, which would pass verification without the algorithm check.
+            local forged_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+                .. ".eyJrZXkiOiJ1c2VyLWtleS1yczI1NiIsIm5iZiI6MTcyNzI3NDk4M30"
+                .. ".6H3x-DNrthHMtsQ72qZNrddTdDjEZuJQX6MNiEBFTOs"
+
+            local code, body = t('/hello?jwt=' .. forged_token, ngx.HTTP_GET)
+            ngx.status = code
+            ngx.print(body)
+        }
+    }
+--- error_code: 401
+--- response_body
+{"message":"failed to verify jwt"}
+--- error_log
+failed to verify jwt: algorithm mismatch, expected RS256
+
+
+
+=== TEST 53: add consumer for default-claims verification
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/consumers',
+                ngx.HTTP_PUT,
+                [[{
+                    "username": "jack",
+                    "plugins": {
+                        "jwt-auth": {
+                            "key": "user-key",
+                            "secret": "my-secret-key"
+                        }
+                    }
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- response_body
+passed
+
+
+
+=== TEST 54: enable jwt-auth WITHOUT claims_to_verify (default exp/nbf path)
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "plugins": {
+                        "jwt-auth": {}
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uri": "/hello"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- response_body
+passed
+
+
+
+=== TEST 55: expired token with no claims_to_verify configured -> rejected
+--- request
+GET /hello?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJrZXkiOiJ1c2VyLWtleSIsImV4cCI6MTU2Mzg3MDUwMX0.pPNVvh-TQsdDzorRwa-uuiLYiEBODscp9wv0cwD6c68
+--- error_code: 401
+--- response_body
+{"message":"failed to verify jwt"}
+--- error_log
+failed to verify jwt: 'exp' claim expired at Tue, 23 Jul 2019 08:28:21 GMT
+
+
+
+=== TEST 56: token without exp claim and no claims_to_verify configured -> accepted
+--- request
+GET /hello?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJrZXkiOiJ1c2VyLWtleSJ9._7aoTZdzQDT0r9swHTcHb3nsujexcGjSTU-LRzTRVyY
+--- response_body
+hello world
+--- no_error_log
+[error]
+
+
+
+=== TEST 57: enable jwt-auth with an explicit empty claims_to_verify array
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "plugins": {
+                        "jwt-auth": {
+                            "claims_to_verify": []
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uri": "/hello"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- response_body
+passed
+
+
+
+=== TEST 58: expired token with an explicit empty claims_to_verify -> still rejected
+--- request
+GET /hello?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJrZXkiOiJ1c2VyLWtleSIsImV4cCI6MTU2Mzg3MDUwMX0.pPNVvh-TQsdDzorRwa-uuiLYiEBODscp9wv0cwD6c68
+--- error_code: 401
+--- response_body
+{"message":"failed to verify jwt"}
+--- error_log
+failed to verify jwt: 'exp' claim expired at Tue, 23 Jul 2019 08:28:21 GMT
+
+
+
+=== TEST 59: malformed signatures must be rejected with 401, not crash with 500
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            -- ES256 consumer: the per-algorithm verifier asserts the signature
+            -- length and decodes it from base64url, so a malformed signature
+            -- used to raise a Lua error and surface as a 500 instead of a 401.
+            local code, body = t('/apisix/admin/consumers',
+                ngx.HTTP_PUT,
+                [[{
+                    "username": "kerouac",
+                    "plugins": {
+                        "jwt-auth": {
+                            "key": "user-key-es256",
+                            "algorithm": "ES256",
+                            "public_key": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEEVs/o5+uQbTjL3chynL4wXgUg2R9\nq9UU8I5mEovUf86QZ7kOBIjJwqnzD1omageEHWwHdBO6B+dFabmdT9POxg==\n-----END PUBLIC KEY-----"
+                        }
+                    }
+                }]]
+                )
+            assert(code < 300, body)
+
+            code, body = t('/apisix/admin/routes/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "plugins": {
+                        "jwt-auth": {}
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uri": "/hello"
+                }]]
+                )
+            assert(code < 300, body)
+
+            -- valid ES256 header + payload (key claim = user-key-es256), with two
+            -- malformed signatures: "YWJj" decodes to 3 bytes (not the required
+            -- 64), and "@@@@" is not valid base64url so decoding returns nil
+            local header_payload = "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9"
+                .. ".eyJrZXkiOiJ1c2VyLWtleS1lczI1NiIsIm5iZiI6MTcyNzI3NDk4M30"
+            for _, sig in ipairs({"YWJj", "@@@@"}) do
+                local rc, rb = t('/hello?jwt=' .. header_payload .. "." .. sig,
+                                 ngx.HTTP_GET)
+                assert(rc == 401, "signature '" .. sig .. "' expected 401 but got "
+                       .. tostring(rc))
+                assert(string.find(rb, "failed to verify jwt", 1, true), rb)
+            end
+            ngx.say("passed")
+        }
+    }
+--- response_body
+passed
 --- no_error_log
 [error]

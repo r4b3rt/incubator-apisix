@@ -1,3 +1,7 @@
+---
+title: APISIX Lua Coding Style Guide
+---
+
 <!--
 #
 # Licensed to the Apache Software Foundation (ASF) under one or more
@@ -17,11 +21,7 @@
 #
 -->
 
-[Chinese](CODE_STYLE_CN.md)
-
-# APISIX Lua Coding Style Guide
-
-## indentation
+## Indentation
 
 Use 4 spaces as an indent:
 
@@ -122,7 +122,7 @@ end
 if a == 1 then
     foo()
 
-elseif a== 2 then
+elseif a == 2 then
     bar()
 
 elseif a == 3 then
@@ -264,7 +264,7 @@ end
 ```lua
 --Yes
 local new_tab = require "table.new"
-local t = new_tab(100, 0)
+local t = new_tab(100000, 0)
 for i = 1, 100000 do
     t[i] = "a"
 end
@@ -317,6 +317,24 @@ local function check(age, name)
     end
     -- do something else
     return true
+end
+```
+
+The function should return `<boolean>`, `err`.
+The first return value means successful or not, if not, the second return value specifies the error message.
+The error message can be ignored in some cases.
+
+```lua
+--No
+local function check()
+    return "failed"
+end
+```
+
+```lua
+--Yes
+local function check()
+    return false, "failed"
 end
 ```
 

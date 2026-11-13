@@ -32,7 +32,7 @@ __DATA__
 
             ngx.say("node_listen: ", config.apisix.node_listen)
             ngx.say("stream_proxy: ", encode_json(config.apisix.stream_proxy))
-            ngx.say("admin_key: ", encode_json(config.apisix.admin_key))
+            ngx.say("admin_key: ", encode_json(config.deployment.admin.admin_key))
         }
     }
 --- request
@@ -44,27 +44,28 @@ admin_key: null
 
 
 
-=== TEST 2: wrong type: expect: number, but got: string
+=== TEST 2: wrong type: expect: table, but got: string
 --- yaml_config
 apisix:
   node_listen: xxxx
 --- must_die
 --- error_log
-failed to parse yaml config: failed to merge, path[apisix->node_listen] expect: number, but got: string
+failed to parse yaml config: failed to merge, path[apisix->node_listen] expect: table, but got: string
 
 
 
 === TEST 3: use `null` means delete
 --- yaml_config
-apisix:
-  admin_key: null
+deployment:
+    admin:
+        admin_key: null
 --- config
   location /t {
     content_by_lua_block {
         local encode_json = require("toolkit.json").encode
         local config = require("apisix.core").config.local_conf()
 
-        ngx.say("admin_key: ", encode_json(config.apisix.admin_key))
+        ngx.say("admin_key: ", encode_json(config.deployment.admin.admin_key))
     }
 }
 --- request
@@ -76,18 +77,64 @@ admin_key: null
 
 === TEST 4: use `~` means delete
 --- yaml_config
-apisix:
-  admin_key: ~
+deployment:
+    admin:
+        admin_key: null
 --- config
   location /t {
     content_by_lua_block {
         local encode_json = require("toolkit.json").encode
         local config = require("apisix.core").config.local_conf()
 
-        ngx.say("admin_key: ", encode_json(config.apisix.admin_key))
+        ngx.say("admin_key: ", encode_json(config.deployment.admin.admin_key))
     }
 }
 --- request
 GET /t
 --- response_body
 admin_key: null
+
+
+
+=== TEST 5: support listen multiple ports with array
+--- yaml_config
+apisix:
+  node_listen:
+    - 1985
+    - 1986
+--- config
+  location /t {
+    content_by_lua_block {
+        local encode_json = require("toolkit.json").encode
+        local config = require("apisix.core").config.local_conf()
+
+        ngx.say("node_listen: ", encode_json(config.apisix.node_listen))
+    }
+}
+--- request
+GET /t
+--- response_body
+node_listen: [1985,1986]
+
+
+
+=== TEST 6: support listen multiple ports with array table
+--- yaml_config
+apisix:
+  node_listen:
+    - port: 1985
+    - port: 1986
+  enable_http2: true
+--- config
+  location /t {
+    content_by_lua_block {
+        local encode_json = require("toolkit.json").encode
+        local config = require("apisix.core").config.local_conf()
+
+        ngx.say("node_listen: ", encode_json(config.apisix.node_listen))
+    }
+}
+--- request
+GET /t
+--- response_body
+node_listen: [{"port":1985},{"port":1986}]

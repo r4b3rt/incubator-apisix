@@ -14,62 +14,84 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 --
-local core = require("apisix.core")
-local ngx_ssl = require("ngx.ssl")
-local ngx_encode_base64 = ngx.encode_base64
-local ngx_decode_base64 = ngx.decode_base64
-local aes = require "resty.aes"
-local assert = assert
-local type = type
+local core           = require("apisix.core")
+local secret         = require("apisix.secret")
+local data_encryption = core.data_encryption
+local ngx_ssl        = require("ngx.ssl")
+local ngx_ssl_client = require("ngx.ssl.clienthello")
+
+local str_lower = string.lower
+local str_byte = string.byte
+local ngx_sub = ngx.re.sub
+local ngx_var = ngx.var
+
+local cert_cache = core.lrucache.new {
+    ttl = 3600, count = 1024,
+}
+
+local pkey_cache = core.lrucache.new {
+    ttl = 3600, count = 1024,
+}
 
 
 local _M = {}
 
 
-local _aes_128_cbc_with_iv = false
-local function get_aes_128_cbc_with_iv()
-    if _aes_128_cbc_with_iv == false then
+-- `preread` takes the SNI from ngx_stream_ssl_preread_module: under TLS passthrough
+-- this worker never performs the handshake, so ngx_ssl.server_name() has nothing.
+function _M.server_name(clienthello, preread)
+    local sni, err
+    if clienthello then
+        sni, err = ngx_ssl_client.get_client_hello_server_name()
+    elseif preread then
+        sni = ngx_var.ssl_preread_server_name
+        if sni == "" then
+            -- defined but empty when the ClientHello carried no SNI; "" is truthy
+            -- and would skip the fallback below
+            sni = nil
+        end
+    else
+        sni, err = ngx_ssl.server_name()
+    end
+    if err then
+        return nil, err
+    end
+
+    if not sni then
         local local_conf = core.config.local_conf()
-        local iv = core.table.try_read_attr(local_conf, "apisix", "ssl", "key_encrypt_salt")
-        if type(iv) =="string" and #iv == 16 then
-            _aes_128_cbc_with_iv = assert(aes:new(iv, nil, aes.cipher(128, "cbc"), {iv = iv}))
-        else
-            _aes_128_cbc_with_iv = nil
+        sni = core.table.try_read_attr(local_conf, "apisix", "ssl", "fallback_sni")
+        if not sni then
+            return nil
         end
     end
-    return _aes_128_cbc_with_iv
+
+    sni = ngx_sub(sni, "\\.$", "", "jo")
+    sni = str_lower(sni)
+    return sni
 end
 
 
+function _M.session_hostname()
+    return ngx_ssl.session_hostname()
+end
+
+
+function _M.set_protocols_by_clienthello(ssl_protocols)
+    if ssl_protocols then
+       return ngx_ssl_client.set_protocols(ssl_protocols)
+    end
+    return true
+end
+
+
+-- Encrypt an SSL private key with the data_encryption keyring. Only PEM-form
+-- keys are encrypted, so already-encrypted or non-PEM values pass through.
 function _M.aes_encrypt_pkey(origin)
-    local aes_128_cbc_with_iv = get_aes_128_cbc_with_iv()
-    if aes_128_cbc_with_iv ~= nil and core.string.has_prefix(origin, "---") then
-        local encrypted = aes_128_cbc_with_iv:encrypt(origin)
-        if encrypted == nil then
-            core.log.error("failed to encrypt key[", origin, "] ")
-            return origin
-        end
-
-        return ngx_encode_base64(encrypted)
+    if not core.string.has_prefix(origin, "---") then
+        return origin
     end
 
-    return origin
-end
-
-
-local function decrypt_priv_pkey(iv, key)
-    local decoded_key = ngx_decode_base64(key)
-    if not decoded_key then
-        core.log.error("base64 decode ssl key failed and skipped. key[", key, "] ")
-        return nil
-    end
-
-    local decrypted = iv:decrypt(decoded_key)
-    if not decrypted then
-        core.log.error("decrypt ssl key failed and skipped. key[", key, "] ")
-    end
-
-    return decrypted
+    return data_encryption.encrypt(origin)
 end
 
 
@@ -78,23 +100,26 @@ local function aes_decrypt_pkey(origin)
         return origin
     end
 
-    local aes_128_cbc_with_iv = get_aes_128_cbc_with_iv()
-    if aes_128_cbc_with_iv ~= nil then
-        return decrypt_priv_pkey(aes_128_cbc_with_iv, origin)
-    end
-    return origin
+    return data_encryption.decrypt(origin, "ssl key")
 end
 _M.aes_decrypt_pkey = aes_decrypt_pkey
 
 
-function _M.validate(cert, key)
+local function validate(cert, key)
     local parsed_cert, err = ngx_ssl.parse_pem_cert(cert)
     if not parsed_cert then
         return nil, "failed to parse cert: " .. err
     end
 
-    key = aes_decrypt_pkey(key)
+    if key == nil then
+        -- sometimes we only need to validate the cert
+        return true
+    end
+
+    local err
+    key, err = aes_decrypt_pkey(key)
     if not key then
+        core.log.error(err)
         return nil, "failed to decrypt previous encrypted key"
     end
 
@@ -105,6 +130,138 @@ function _M.validate(cert, key)
 
     -- TODO: check if key & cert match
     return true
+end
+_M.validate = validate
+
+
+local function parse_pem_cert(sni, cert)
+    core.log.debug("parsing cert for sni: ", sni)
+
+    local parsed, err = ngx_ssl.parse_pem_cert(cert)
+    return parsed, err
+end
+
+
+function _M.fetch_cert(sni, cert)
+    local parsed_cert, err = cert_cache(cert, nil, parse_pem_cert, sni, cert)
+    if not parsed_cert then
+        return false, err
+    end
+
+    return parsed_cert
+end
+
+
+local function parse_pem_priv_key(sni, pkey)
+    core.log.debug("parsing priv key for sni: ", sni)
+
+    local key, err = aes_decrypt_pkey(pkey)
+    if not key then
+        core.log.error(err)
+        return nil, err
+    end
+    local parsed, err = ngx_ssl.parse_pem_priv_key(key)
+    return parsed, err
+end
+
+
+function _M.fetch_pkey(sni, pkey)
+    local parsed_pkey, err = pkey_cache(pkey, nil, parse_pem_priv_key, sni, pkey)
+    if not parsed_pkey then
+        return false, err
+    end
+
+    return parsed_pkey
+end
+
+
+local function support_client_verification()
+    return ngx_ssl.verify_client ~= nil
+end
+_M.support_client_verification = support_client_verification
+
+
+function _M.check_ssl_conf(in_dp, conf)
+    if not in_dp then
+        local ok, err = core.schema.check(core.schema.ssl, conf)
+        if not ok then
+            return nil, "invalid configuration: " .. err
+        end
+    end
+
+    if not secret.check_secret_uri(conf.cert) and
+        not secret.check_secret_uri(conf.key) then
+
+        local ok, err = validate(conf.cert, conf.key)
+        if not ok then
+            return nil, err
+        end
+    end
+
+    if conf.type == "client" then
+        return true
+    end
+
+    local numcerts = conf.certs and #conf.certs or 0
+    local numkeys = conf.keys and #conf.keys or 0
+    if numcerts ~= numkeys then
+        return nil, "mismatched number of certs and keys"
+    end
+
+    for i = 1, numcerts do
+        if not secret.check_secret_uri(conf.certs[i]) and
+            not secret.check_secret_uri(conf.keys[i]) then
+
+            local ok, err = validate(conf.certs[i], conf.keys[i])
+            if not ok then
+                return nil, "failed to handle cert-key pair[" .. i .. "]: " .. err
+            end
+        end
+    end
+
+    if conf.client then
+        if not support_client_verification() then
+            return nil, "client tls verify unsupported"
+        end
+
+        if not secret.check_secret_uri(conf.client.ca) then
+            local ok, err = validate(conf.client.ca, nil)
+            if not ok then
+                return nil, "failed to validate client_cert: " .. err
+            end
+        end
+    end
+
+    return true
+end
+
+
+function _M.get_status_request_ext()
+    core.log.debug("parsing status request extension ... ")
+    local ext = ngx_ssl_client.get_client_hello_ext(5)
+    if not ext then
+        core.log.debug("no contains status request extension")
+        return false
+    end
+    local total_len = #ext
+    -- 1-byte for CertificateStatusType
+    -- 2-byte for zero-length "responder_id_list"
+    -- 2-byte for zero-length "request_extensions"
+    if total_len < 5 then
+        core.log.error("bad ssl client hello extension: ",
+                       "extension data error")
+        return false
+    end
+
+    -- CertificateStatusType
+    local status_type = str_byte(ext, 1)
+    if status_type == 1 then
+        core.log.debug("parsing status request extension ok: ",
+                       "status_type is ocsp(1)")
+        return true
+    end
+
+    return false
 end
 
 

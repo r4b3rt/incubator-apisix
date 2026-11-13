@@ -38,7 +38,7 @@ __DATA__
 GET /t
 --- response_body
 etcd host: http://127.0.0.1:2379
-first plugin: "api-breaker"
+first plugin: "real-ip"
 
 
 
@@ -55,12 +55,15 @@ first plugin: "api-breaker"
         }
     }
 --- yaml_config
-etcd:
-  host:
-    - "http://127.0.0.1:2379" # etcd address
-  prefix: "/apisix"             # apisix configurations prefix
-  timeout: 1
-
+deployment:
+  role: traditional
+  role_traditional:
+    config_provider: etcd
+  etcd:
+    host:
+      - "http://127.0.0.1:2379" # etcd address
+    prefix: "/apisix"           # apisix configurations prefix
+    timeout: 1
 plugins:
   - example-plugin
 
@@ -147,7 +150,7 @@ bool:
 
 float:
   canonical: 6.8523015e+5
-  exponentioal: 685.230_15e+03
+  exponential: 685.230_15e+03
   fixed: 685_230.15
   sexagesimal: 190:20:30.15
   negative infinity: -.inf

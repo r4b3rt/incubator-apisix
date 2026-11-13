@@ -1,32 +1,46 @@
 name: ❄️ Lint
 
-on: [pull_request]
+on: [push, pull_request]
+
+permissions:
+  contents: read
 
 jobs:
-  markdownlint:
-    name: 🍇 Markdown
+  misc:
+    name: misc checker
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - name: 🚀 Use Node.js
-        uses: actions/setup-node@v1
-        with:
-          node-version: '12.x'
-      - run: npm install -g markdownlint-cli@0.25.0
-      - run: markdownlint '**/*.md' --ignore node_modules
-  yamllint:
-    name: 🍺 YAML
+      - name: Check out code.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: spell check
+        run: |
+          pip install codespell==2.1.0
+          # codespell considers some repo name in go.sum are misspelled
+          git grep --cached -l '' | grep -v go.sum | grep -v pnpm-lock.yaml |xargs codespell --ignore-words=.ignore_words --skip="*.ts"
+      - name: Merge conflict
+        run: |
+          bash ./utils/check-merge-conflict.sh
+      - name: Plugin Code
+        run: |
+          bash ./utils/check-plugins-code.sh
+
+  ci-eclint:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-python@v2
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Nodejs env
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          python-version: '3.x'  # Version range or exact version of a Python version to use, using SemVer's version range syntax
-          architecture: 'x64'  # optional x64 or x86. Defaults to x64 if not specified
-      - name: Install dependencies
+          node-version: '12'
+
+      - name: Install eclint
         run: |
-          python -m pip install --upgrade pip
-          pip install yamllint
-      - name: 🧹 YAML Lint
+          sudo npm install -g eclint
+
+      - name: Run eclint
         run: |
-          yamllint .
+          eclint check

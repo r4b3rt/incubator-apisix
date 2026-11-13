@@ -20,6 +20,16 @@ log_level('debug');
 repeat_each(1);
 no_long_string();
 no_root_location();
+
+add_block_preprocessor(sub {
+    my ($block) = @_;
+
+    if (!defined $block->request) {
+        $block->set_value("request", "GET /t");
+    }
+
+});
+
 run_tests;
 
 __DATA__
@@ -37,12 +47,8 @@ __DATA__
             ngx.say("done")
         }
     }
---- request
-GET /t
 --- response_body
 done
---- no_error_log
-[error]
 
 
 
@@ -60,6 +66,7 @@ done
                                                  buffer_duration = 2,
                                                  inactive_timeout = 2,
                                                  batch_max_size = 500,
+                                                 ssl_verify = false,
                                                  })
             if not ok then
                 ngx.say(err)
@@ -68,12 +75,8 @@ done
             ngx.say("done")
         }
     }
---- request
-GET /t
 --- response_body
 done
---- no_error_log
-[error]
 
 
 
@@ -98,13 +101,9 @@ done
             ngx.say("done")
         }
     }
---- request
-GET /t
 --- response_body
 property "uri" is required
 done
---- no_error_log
-[error]
 
 
 
@@ -133,31 +132,6 @@ done
                             "type": "roundrobin"
                         },
                         "uri": "/opentracing"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                                "http-logger": {
-                                    "uri": "http://127.0.0.1:1982/hello",
-                                    "batch_max_size": 1,
-                                    "max_retry_count": 1,
-                                    "retry_delay": 2,
-                                    "buffer_duration": 2,
-                                    "inactive_timeout": 2
-                                }
-                            },
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1982": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "uri": "/opentracing"
-                        },
-                        "key": "/apisix/routes/1"
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -167,12 +141,8 @@ done
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -197,7 +167,7 @@ Batch Processor[http logger] successfully processed the entries
                  [[{
                         "plugins": {
                             "http-logger": {
-                                "uri": "http://127.0.0.1:8888/hello-world-http",
+                                "uri": "http://127.0.0.1:1982/echo",
                                 "batch_max_size": 1,
                                 "max_retry_count": 1,
                                 "retry_delay": 2,
@@ -212,31 +182,6 @@ Batch Processor[http logger] successfully processed the entries
                             "type": "roundrobin"
                         },
                         "uri": "/hello"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                                "http-logger": {
-                                    "uri": "http://127.0.0.1:8888/hello-world-http",
-                                    "batch_max_size": 1,
-                                    "max_retry_count": 1,
-                                    "retry_delay": 2,
-                                    "buffer_duration": 2,
-                                    "inactive_timeout": 2
-                                }
-                            },
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1982": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "uri": "/hello"
-                        },
-                        "key": "/apisix/routes/1"
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -246,12 +191,8 @@ Batch Processor[http logger] successfully processed the entries
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -276,12 +217,13 @@ Batch Processor[http logger] successfully processed the entries
                  [[{
                         "plugins": {
                             "http-logger": {
-                                "uri": "https://127.0.0.1:8888/hello-world-http",
+                                "uri": "https://127.0.0.1:1982/echo",
                                 "batch_max_size": 1,
                                 "max_retry_count": 1,
                                 "retry_delay": 2,
                                 "buffer_duration": 2,
-                                "inactive_timeout": 2
+                                "inactive_timeout": 2,
+                                "ssl_verify": true
                             }
                         },
                         "upstream": {
@@ -291,31 +233,6 @@ Batch Processor[http logger] successfully processed the entries
                             "type": "roundrobin"
                         },
                         "uri": "/hello1"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                                "http-logger": {
-                                    "uri": "https://127.0.0.1:8888/hello-world-http",
-                                    "batch_max_size": 1,
-                                    "max_retry_count": 1,
-                                    "retry_delay": 2,
-                                    "buffer_duration": 2,
-                                    "inactive_timeout": 2
-                                }
-                            },
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1982": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "uri": "/hello1"
-                        },
-                        "key": "/apisix/routes/1"
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -325,12 +242,8 @@ Batch Processor[http logger] successfully processed the entries
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -340,7 +253,7 @@ GET /hello1
 --- response_body
 hello1 world
 --- error_log
-failed to perform SSL with host[127.0.0.1] port[8888] handshake failed
+failed to perform SSL with host[127.0.0.1] port[1982] handshake failed
 --- wait: 1.5
 
 
@@ -355,12 +268,13 @@ failed to perform SSL with host[127.0.0.1] port[8888] handshake failed
                  [[{
                         "plugins": {
                             "http-logger": {
-                                "uri": "https://127.0.0.1:9999/hello-world-http",
+                                "uri": "https://127.0.0.1:1983/echo",
                                 "batch_max_size": 1,
                                 "max_retry_count": 1,
                                 "retry_delay": 2,
                                 "buffer_duration": 2,
-                                "inactive_timeout": 2
+                                "inactive_timeout": 2,
+                                "ssl_verify": false
                             }
                         },
                         "upstream": {
@@ -370,31 +284,6 @@ failed to perform SSL with host[127.0.0.1] port[8888] handshake failed
                             "type": "roundrobin"
                         },
                         "uri": "/hello1"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                                "http-logger": {
-                                    "uri": "https://127.0.0.1:9999/hello-world-http",
-                                    "batch_max_size": 1,
-                                    "max_retry_count": 1,
-                                    "retry_delay": 2,
-                                    "buffer_duration": 2,
-                                    "inactive_timeout": 2
-                                }
-                            },
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1982": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "uri": "/hello1"
-                        },
-                        "key": "/apisix/routes/1"
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -404,12 +293,8 @@ failed to perform SSL with host[127.0.0.1] port[8888] handshake failed
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -434,7 +319,7 @@ Batch Processor[http logger] successfully processed the entries
                  [[{
                         "plugins": {
                             "http-logger": {
-                                "uri": "https://127.0.0.1:9999/hello-world-http",
+                                "uri": "https://127.0.0.1:1983/echo",
                                 "batch_max_size": 2,
                                 "max_retry_count": 1,
                                 "retry_delay": 2,
@@ -449,31 +334,6 @@ Batch Processor[http logger] successfully processed the entries
                             "type": "roundrobin"
                         },
                         "uri": "/hello1"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                                "http-logger": {
-                                    "uri": "https://127.0.0.1:9999/hello-world-http",
-                                    "batch_max_size": 2,
-                                    "max_retry_count": 1,
-                                    "retry_delay": 2,
-                                    "buffer_duration": 2,
-                                    "inactive_timeout": 2
-                                }
-                            },
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1982": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "uri": "/hello1"
-                        },
-                        "key": "/apisix/routes/1"
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -483,12 +343,8 @@ Batch Processor[http logger] successfully processed the entries
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -529,7 +385,7 @@ Batch Processor[http logger] successfully processed the entries
                  [[{
                         "plugins": {
                             "http-logger": {
-                                "uri": "http://127.0.0.1:9991/hello-world-http",
+                                "uri": "http://127.0.0.1:9991/echo",
                                 "batch_max_size": 1,
                                 "max_retry_count": 1,
                                 "retry_delay": 2,
@@ -544,31 +400,6 @@ Batch Processor[http logger] successfully processed the entries
                             "type": "roundrobin"
                         },
                         "uri": "/hello1"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                                "http-logger": {
-                                    "uri": "http://127.0.0.1:9991/hello-world-http",
-                                    "batch_max_size": 1,
-                                    "max_retry_count": 1,
-                                    "retry_delay": 2,
-                                    "buffer_duration": 2,
-                                    "inactive_timeout": 2
-                                }
-                            },
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1982": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "uri": "/hello1"
-                        },
-                        "key": "/apisix/routes/1"
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -578,12 +409,8 @@ Batch Processor[http logger] successfully processed the entries
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -631,12 +458,8 @@ Batch Processor[http logger] failed to process entries: failed to connect to hos
             ngx.say("done")
         }
     }
---- request
-GET /t
 --- response_body
 done
---- no_error_log
-[error]
 
 
 
@@ -665,31 +488,6 @@ done
                             "type": "roundrobin"
                         },
                         "uri": "/opentracing"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                                "http-logger": {
-                                    "uri": "http://127.0.0.1:1982/hello",
-                                    "batch_max_size": 1,
-                                    "max_retry_count": 1,
-                                    "retry_delay": 2,
-                                    "buffer_duration": 2,
-                                    "inactive_timeout": 2
-                                }
-                            },
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1982": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "uri": "/opentracing"
-                        },
-                        "key": "/apisix/routes/1"
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -726,31 +524,6 @@ done
                             "type": "roundrobin"
                         },
                         "uri": "/opentracing"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                                "http-logger": {
-                                    "uri": "http://127.0.0.1:1982/hello1",
-                                    "batch_max_size": 1,
-                                    "max_retry_count": 1,
-                                    "retry_delay": 2,
-                                    "buffer_duration": 2,
-                                    "inactive_timeout": 2
-                                }
-                            },
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1982": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "uri": "/opentracing"
-                        },
-                        "key": "/apisix/routes/1"
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -773,8 +546,6 @@ done
             ngx.print(body4)
         }
     }
---- request
-GET /t
 --- wait: 0.5
 --- response_body
 passedopentracing
@@ -784,3 +555,344 @@ qr/sending a batch logs to http:\/\/127.0.0.1:1982\/hello\d?/
 --- grep_error_log_out
 sending a batch logs to http://127.0.0.1:1982/hello
 sending a batch logs to http://127.0.0.1:1982/hello1
+
+
+
+=== TEST 18: check log schema(include_resp_body_expr)
+--- config
+    location /t {
+        content_by_lua_block {
+            local plugin = require("apisix.plugins.http-logger")
+            local ok, err = plugin.check_schema({uri = "http://127.0.0.1",
+                                                 auth_header = "Basic 123",
+                                                 timeout = 3,
+                                                 name = "http-logger",
+                                                 max_retry_count = 2,
+                                                 retry_delay = 2,
+                                                 buffer_duration = 2,
+                                                 inactive_timeout = 2,
+                                                 batch_max_size = 500,
+                                                 include_resp_body = true,
+                                                 include_resp_body_expr = {
+                                                     {"bar", "<>", "foo"}
+                                                 }
+                                                 })
+            if not ok then
+                ngx.say(err)
+            end
+
+            ngx.say("done")
+        }
+    }
+--- response_body
+failed to validate the 'include_resp_body_expr' expression: invalid operator '<>'
+done
+
+
+
+=== TEST 19: ssl_verify default is false for comppatibaility
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "plugins": {
+                            "http-logger": {
+                                "uri": "http://127.0.0.1:1982/hello"
+                            }
+                        },
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1982": 1
+                            },
+                            "type": "roundrobin"
+                        },
+                        "uri": "/opentracing"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- response_body
+passed
+
+
+
+=== TEST 20: set correct https endpoint and ssl verify true
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "plugins": {
+                            "http-logger": {
+                                "uri": "https://127.0.0.1:1983/echo",
+                                "batch_max_size": 1,
+                                "max_retry_count": 1,
+                                "retry_delay": 2,
+                                "buffer_duration": 2,
+                                "inactive_timeout": 2,
+                                "ssl_verify": true
+                            }
+                        },
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1982": 1
+                            },
+                            "type": "roundrobin"
+                        },
+                        "uri": "/hello1"
+                }]]
+                )
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- response_body
+passed
+
+
+
+=== TEST 21: access correct https endpoint but ssl verify failed
+--- request
+GET /hello1
+--- error_log
+certificate host mismatch
+--- wait: 3
+
+
+
+=== TEST 22: set correct https endpoint and ssl verify false
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "plugins": {
+                            "http-logger": {
+                                "uri": "https://127.0.0.1:1983/echo",
+                                "batch_max_size": 1,
+                                "max_retry_count": 1,
+                                "retry_delay": 2,
+                                "buffer_duration": 2,
+                                "inactive_timeout": 2,
+                                "ssl_verify": false
+                            }
+                        },
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1982": 1
+                            },
+                            "type": "roundrobin"
+                        },
+                        "uri": "/hello1"
+                }]]
+                )
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- response_body
+passed
+
+
+
+=== TEST 23: access correct https endpoint but ssl verify ok
+--- request
+GET /hello1
+--- wait: 3
+
+
+
+=== TEST 24: set route with include_resp_body enabled
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "plugins": {
+                            "http-logger": {
+                                "uri": "http://127.0.0.1:1982/log",
+                                "batch_max_size": 1,
+                                "max_retry_count": 1,
+                                "retry_delay": 2,
+                                "buffer_duration": 2,
+                                "inactive_timeout": 2,
+                                "include_resp_body": true
+                            }
+                        },
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1982": 1
+                            },
+                            "type": "roundrobin"
+                        },
+                        "uri": "/hello"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- response_body
+passed
+
+
+
+=== TEST 25: test http logger with include_resp_body
+--- request
+GET /hello
+--- response_body
+hello world
+--- error_log eval
+qr/request log:.*"response":\{"body":"hello world\\n"/
+--- wait: 1.5
+
+
+
+=== TEST 26: set route with http-logger include_resp_body disabled file-logger include_resp_body enabled
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "plugins": {
+                            "http-logger": {
+                                "uri": "http://127.0.0.1:1982/log",
+                                "batch_max_size": 1,
+                                "max_retry_count": 1,
+                                "retry_delay": 2,
+                                "buffer_duration": 2,
+                                "inactive_timeout": 2,
+                                "include_resp_body": false
+                            },
+                            "file-logger": {
+                              "path": "/var/log/apisix/file.log",
+                              "include_resp_body": true
+                            }
+                        },
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1982": 1
+                            },
+                            "type": "roundrobin"
+                        },
+                        "uri": "/hello"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- response_body
+passed
+
+
+
+=== TEST 27: test http logger without log response body
+--- request
+GET /hello
+--- response_body
+hello world
+--- error_log eval
+qr/request log:(?!.*"body")/
+--- wait: 1.5
+
+
+
+=== TEST 28: set global file logger and http logger with route file logger
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            t('/apisix/admin/global_rules/1', ngx.HTTP_DELETE)
+
+            local code, body = t('/apisix/admin/global_rules/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "plugins": {
+                            "http-logger": {
+                                "uri": "http://127.0.0.1:1982/log",
+                                "batch_max_size": 1,
+                                "max_retry_count": 1,
+                                "retry_delay": 2,
+                                "buffer_duration": 2,
+                                "inactive_timeout": 2,
+                                "include_resp_body": true
+                            },
+                            "file-logger": {
+                              "path": "global-file-with-resp-body.log",
+                              "include_resp_body": true
+                            }
+                        }
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+                ngx.say(body)
+                return
+            end
+
+            code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "plugins": {
+                            "file-logger": {
+                              "path": "route-file-with-resp-body.log",
+                              "include_resp_body": true
+                            }
+                        },
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1982": 1
+                            },
+                            "type": "roundrobin"
+                        },
+                        "uri": "/hello"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- response_body
+passed
+
+
+
+=== TEST 29: http logger keeps response body when file logger runs in global rule and route
+--- request
+GET /hello
+--- response_body
+hello world
+--- error_log eval
+qr/request log:.*"response":\{"body":"hello world\\n"/
+--- wait: 1.5

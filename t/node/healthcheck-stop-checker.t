@@ -26,12 +26,35 @@ BEGIN {
 
 use t::APISIX 'no_plan';
 
-master_on();
 repeat_each(1);
 log_level('info');
 no_root_location();
 no_shuffle();
 worker_connections(256);
+
+# the healthcheck stop test requires exiting worker to keep watching etcd for a while,
+# which is not the case when using gRPC.
+my $yaml_config = <<_EOC_;
+deployment:
+  role: traditional
+  role_traditional:
+    config_provider: etcd
+  etcd:
+    prefix: "/apisix"
+    host:
+      - "http://127.0.0.1:2379"
+    use_grpc: false
+  admin:
+    admin_key: null
+_EOC_
+
+add_block_preprocessor(sub {
+    my ($block) = @_;
+
+    if (!$block->yaml_config) {
+        $block->set_value("yaml_config", $yaml_config);
+    }
+});
 
 run_tests();
 
@@ -42,8 +65,6 @@ __DATA__
 PUT /apisix/admin/routes/1
 {"uri":"/server_port","upstream":{"type":"roundrobin","nodes":{"127.0.0.1:1980":1,"127.0.0.1:1981":1},"checks":{"active":{"http_path":"/status","host":"foo.com","healthy":{"interval":1,"successes":1},"unhealthy":{"interval":1,"http_failures":2}}}}}
 --- error_code_like: ^20\d$
---- no_error_log
-[error]
 
 
 
@@ -63,15 +84,15 @@ PUT /apisix/admin/routes/1
             end
             ngx.say("1 code: ", code)
 
-            ngx.sleep(0.2)
+            ngx.sleep(3)
             local code, body = t('/server_port', "GET")
             ngx.say("2 code: ", code)
 
-            ngx.sleep(0.2)
+            ngx.sleep(2)
             code = t('/apisix/admin/routes/1', "DELETE")
             ngx.say("3 code: ", code)
 
-            ngx.sleep(0.2)
+            ngx.sleep(3)
             local code, body = t('/server_port', "GET")
             ngx.say("4 code: ", code)
         }
@@ -88,6 +109,7 @@ qr/create new checker: table: 0x|try to release checker: table: 0x/
 --- grep_error_log_out
 create new checker: table: 0x
 try to release checker: table: 0x
+--- timeout: 10
 
 
 
@@ -96,8 +118,6 @@ try to release checker: table: 0x
 PUT /apisix/admin/routes/1
 {"uri":"/server_port","upstream":{"type":"roundrobin","nodes":{"127.0.0.1:1980":1,"127.0.0.1:1981":1},"checks":{"active":{"http_path":"/status","host":"foo.com","healthy":{"interval":1,"successes":1},"unhealthy":{"interval":1,"http_failures":2}}}}}
 --- error_code: 201
---- no_error_log
-[error]
 
 
 
@@ -109,7 +129,7 @@ PUT /apisix/admin/routes/1
 
             local code, body = t('/server_port', "GET")
             ngx.say("1 code: ", code)
-
+            ngx.sleep(2)
             local code, status, body = t('/apisix/admin/routes/1',
                 "PUT",
                 [[{"uri":"/server_port","upstream":{"type":"roundrobin","nodes":{"127.0.0.1:1980":1,"127.0.0.1:1981":1},"checks":{"active":{"http_path":"/status","healthy":{"interval":1,"successes":1},"unhealthy":{"interval":1,"http_failures":2}}}}}]]
@@ -120,9 +140,10 @@ PUT /apisix/admin/routes/1
             end
             ngx.say("2 code: ", code)
 
-            ngx.sleep(0.2)
+            ngx.sleep(2)
             local code, body = t('/server_port', "GET")
             ngx.say("3 code: ", code)
+            ngx.sleep(2)
         }
     }
 --- request
@@ -132,8 +153,106 @@ GET /t
 2 code: 200
 3 code: 200
 --- grep_error_log eval
-qr/create new checker: table: 0x|try to release checker: table: 0x/
+qr/create new checker: table: 0x|try to release checker: table: 0x|releasing existing checker: table: 0x/
 --- grep_error_log_out
 create new checker: table: 0x
-try to release checker: table: 0x
 create new checker: table: 0x
+releasing existing checker: table: 0x
+--- timeout: 7
+
+
+
+=== TEST 5: update + delete for /upstreams
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+
+            local code, _, body = t('/apisix/admin/upstreams/stopchecker',
+                "PUT",
+                [[{"type":"roundrobin","nodes":{"127.0.0.1:1980":1,"127.0.0.1:1981":1},"checks":{"active":{"http_path":"/status","healthy":{"interval":1,"successes":1},"unhealthy":{"interval":1,"http_failures":2}}}}]]
+            )
+
+            if code > 300 then
+                ngx.status = code
+                ngx.say(body)
+                return
+            end
+
+            local code, _, body = t('/apisix/admin/routes/1',
+                "PUT",
+                [[{"uri":"/server_port","upstream_id":"stopchecker"}]]
+            )
+
+            if code > 300 then
+                ngx.status = code
+                ngx.say(body)
+                return
+            end
+
+            ngx.sleep(1)
+            code, _, body = t('/server_port', "GET")
+
+            if code > 300 then
+                ngx.status = code
+                ngx.say(body)
+                return
+            end
+
+            ngx.sleep(3)
+
+            -- update
+            code, _, body = t('/apisix/admin/upstreams/stopchecker',
+                "PUT",
+                [[{"type":"roundrobin","nodes":{"127.0.0.1:1980":1,"127.0.0.1:1981":1},"checks":{"active":{"http_path":"/void","healthy":{"interval":1,"successes":1},"unhealthy":{"interval":1,"http_failures":1}}}}]]
+            )
+
+            if code > 300 then
+                ngx.status = code
+                ngx.say(body)
+                return
+            end
+
+            ngx.sleep(3)
+            code, _, body = t('/server_port', "GET")
+
+            if code > 300 then
+                ngx.status = code
+                ngx.say(body)
+                return
+            end
+
+            ngx.sleep(3)
+            -- delete
+            code, _, body = t('/apisix/admin/routes/1', "DELETE")
+
+            if code > 300 then
+                ngx.status = code
+                ngx.say(body)
+                return
+            end
+            ngx.sleep(3) -- wait for routes delete event synced
+
+            code, _, body = t('/apisix/admin/upstreams/stopchecker', "DELETE")
+
+            if code > 300 then
+                ngx.status = code
+                ngx.say(body)
+                return
+            end
+            ngx.sleep(10)
+            ngx.say("ok")
+        }
+    }
+--- request
+GET /t
+--- response_body
+ok
+--- grep_error_log eval
+qr/create new checker: table: 0x|try to release checker: table: 0x|releasing existing checker: table: 0x/
+--- grep_error_log_out
+create new checker: table: 0x
+create new checker: table: 0x
+releasing existing checker: table: 0x
+try to release checker: table: 0x
+--- timeout: 30

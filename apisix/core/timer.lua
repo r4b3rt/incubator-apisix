@@ -14,6 +14,11 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 --
+
+--- Wrapped timer module, can cancel the running timers.
+--
+-- @module core.timer
+
 local log = require("apisix.core.log")
 local sleep = require("apisix.core.utils").sleep
 local timer_every = ngx.timer.every
@@ -35,14 +40,17 @@ local function _internal(timer)
         local ok, err = pcall(timer.callback_fun)
         if not ok then
             log.error("failed to run the timer: ", timer.name, " err: ", err)
-            sleep(timer.sleep_fail)
+
+            if timer.sleep_fail > 0 then
+                sleep(timer.sleep_fail)
+            end
 
         elseif timer.sleep_succ > 0 then
             sleep(timer.sleep_succ)
         end
 
         update_time()
-    until timer.each_ttl and now() >= timer.start_time + timer.each_ttl
+    until timer.each_ttl <= 0 or now() >= timer.start_time + timer.each_ttl
 end
 
 local function run_timer(premature, self)

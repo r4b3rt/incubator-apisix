@@ -14,36 +14,61 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 --
-local core_str = require("apisix.core.string")
-local table    = require("apisix.core.table")
-local log      = require("apisix.core.log")
-local string   = require("apisix.core.string")
-local ngx_re   = require("ngx.re")
-local resolver = require("resty.dns.resolver")
-local ipmatcher= require("resty.ipmatcher")
-local ffi      = require("ffi")
-local base     = require("resty.core.base")
-local open     = io.open
-local math     = math
-local sub_str  = string.sub
-local str_byte = string.byte
-local tonumber = tonumber
-local tostring = tostring
-local re_gsub  = ngx.re.gsub
-local type     = type
-local io_popen = io.popen
-local C        = ffi.C
-local ffi_string = ffi.string
+
+--- Collection of util functions.
+--
+-- @module core.utils
+
+local config_local   = require("apisix.core.config_local")
+local core_str       = require("apisix.core.string")
+local rfind_char     = core_str.rfind_char
+local table          = require("apisix.core.table")
+local log            = require("apisix.core.log")
+local json           = require("apisix.core.json")
+local string         = require("apisix.core.string")
+local dns_client     = require("apisix.core.dns.client")
+local ngx_re         = require("ngx.re")
+local lrucache       = require("resty.lrucache.pureffi")
+local tablepool      = require("tablepool")
+local ipmatcher      = require("resty.ipmatcher")
+local ffi            = require("ffi")
+local base           = require("resty.core.base")
+local open           = io.open
+local sub_str        = string.sub
+local str_byte       = string.byte
+local str_gsub       = string.gsub
+local tonumber       = tonumber
+local tostring       = tostring
+local re_gsub        = ngx.re.gsub
+local re_match       = ngx.re.match
+local re_gmatch      = ngx.re.gmatch
+local type           = type
+local C              = ffi.C
+local ffi_string     = ffi.string
+local ffi_new        = ffi.new
 local get_string_buf = base.get_string_buf
-local exiting = ngx.worker.exiting
-local ngx_sleep    = ngx.sleep
+local exiting        = ngx.worker.exiting
+local ngx_sleep      = ngx.sleep
+local ipairs         = ipairs
+local str_format     = string.format
+local tab_concat     = table.concat
+local ngx_now        = ngx.now
+local ngx_update_time = ngx.update_time
+local math_random    = math.random
+local math_floor     = math.floor
+local bit            = require("bit")
 
 local hostname
+local dns_resolvers
+local current_inited_resolvers
+local current_dns_client
 local max_sleep_interval = 1
 
 ffi.cdef[[
     int ngx_escape_uri(char *dst, const char *src,
         size_t size, int type);
+    int gethostname(char *name, size_t len);
+    char *strerror(int errnum);
 ]]
 
 
@@ -80,77 +105,83 @@ function _M.split_uri(uri)
 end
 
 
-local function dns_parse(domain, resolvers)
-    resolvers = resolvers or _M.resolvers
-    local r, err = resolver:new{
-        nameservers = table.clone(resolvers),
-        retrans = 5,  -- 5 retransmissions on receive timeout
-        timeout = 2000,  -- 2 sec
-    }
+local function dns_parse(domain, selector)
+    if dns_resolvers ~= current_inited_resolvers then
+        local local_conf = config_local.local_conf()
+        local valid = table.try_read_attr(local_conf, "apisix", "dns_resolver_valid")
+        local enable_resolv_search_opt = table.try_read_attr(local_conf, "apisix",
+                                                             "enable_resolv_search_opt")
+        local opts = {
+            nameservers = table.clone(dns_resolvers),
+            order = {"last", "A", "AAAA", "CNAME"}, -- avoid querying SRV
+        }
 
-    if not r then
-        return nil, "failed to instantiate the resolver: " .. err
+        opts.validTtl = valid
+
+        if not enable_resolv_search_opt then
+            opts.search = {}
+        end
+
+        local client, err = dns_client.new(opts)
+        if not client then
+            return nil, "failed to init the dns client: " .. err
+        end
+
+        current_dns_client = client
+        current_inited_resolvers = dns_resolvers
     end
 
-    local answers, err = r:query(domain, nil, {})
-    if not answers then
-        return nil, "failed to query the DNS server: " .. err
-    end
-
-    if answers.errcode then
-        return nil, "server returned error code: " .. answers.errcode
-                    .. ": " .. answers.errstr
-    end
-
-    local idx = math.random(1, #answers)
-    local answer = answers[idx]
-    if answer.type == 1 then
-        return answer
-    end
-
-    if answer.type ~= 5 then
-        return nil, "unsupport DNS answer"
-    end
-
-    return dns_parse(answer.cname, resolvers)
+    return current_dns_client:resolve(domain, selector)
 end
 _M.dns_parse = dns_parse
 
 
-function _M.set_resolver(resolvers)
-    _M.resolvers = resolvers
+local function set_resolver(resolvers)
+    dns_resolvers = resolvers
+end
+_M.set_resolver = set_resolver
+
+
+function _M.get_resolver(resolvers)
+    return dns_resolvers
 end
 
 
-local function rfind_char(s, ch, idx)
-    local b = str_byte(ch)
-    for i = idx or #s, 1, -1 do
-        if str_byte(s, i, i) == b then
-            return i
-        end
+local function _parse_ipv4_or_host(addr)
+    local pos = rfind_char(addr, ":", #addr - 1)
+    if not pos then
+        return addr, nil
     end
-    return nil
+
+    local host = sub_str(addr, 1, pos - 1)
+    local port = sub_str(addr, pos + 1)
+    return host, tonumber(port)
+end
+
+
+local function _parse_ipv6_without_port(addr)
+    return addr
 end
 
 
 -- parse_addr parses 'addr' into the host and the port parts. If the 'addr'
--- doesn't have a port, 80 is used to return. For malformed 'addr', the entire
--- 'addr' is returned as the host part. For IPv6 literal host, like [::1],
--- the square brackets will be kept.
+-- doesn't have a port, nil is used to return.
+-- For IPv6 literal host with brackets, like [::1], the square brackets will be kept.
+-- For malformed 'addr', the returned value can be anything. This method doesn't validate
+-- if the input is valid.
 function _M.parse_addr(addr)
-    local default_port = 80
     if str_byte(addr, 1) == str_byte("[") then
-        -- IPv6 format
+        -- IPv6 format, with brackets, maybe with port
         local right_bracket = str_byte("]")
         local len = #addr
         if str_byte(addr, len) == right_bracket then
             -- addr in [ip:v6] format
-            return addr, default_port
+            return addr, nil
         else
             local pos = rfind_char(addr, ":", #addr - 1)
             if not pos or str_byte(addr, pos - 1) ~= right_bracket then
                 -- malformed addr
-                return addr, default_port
+                return addr, nil
             end
 
             -- addr in [ip:v6]:port format
@@ -160,15 +191,29 @@ function _M.parse_addr(addr)
         end
 
     else
-        -- IPv4 format
-        local pos = rfind_char(addr, ":", #addr - 1)
-        if not pos then
-            return addr, default_port
+        -- When we reach here, the input can be:
+        -- 1. IPv4
+        -- 2. IPv4, with port
+        -- 3. IPv6, like "2001:db8::68" or "::ffff:192.0.2.1"
+        -- 4. Malformed input
+        -- 5. Host, like "test.com" or "localhost"
+        -- 6. Host with port
+        local colon = str_byte(":")
+        local colon_counter = 0
+        local dot = str_byte(".")
+        for i = 1, #addr do
+            local ch = str_byte(addr, i, i)
+            if ch == dot then
+                return _parse_ipv4_or_host(addr)
+            elseif ch == colon then
+                colon_counter = colon_counter + 1
+                if colon_counter == 2 then
+                    return _parse_ipv6_without_port(addr)
+                end
+            end
         end
 
-        local host = sub_str(addr, 1, pos - 1)
-        local port = sub_str(addr, pos + 1)
-        return host, tonumber(port)
+        return _parse_ipv4_or_host(addr)
     end
 end
 
@@ -180,6 +225,17 @@ function _M.uri_safe_encode(uri)
     C.ngx_escape_uri(buf, uri, #uri, 0)
 
     return ffi_string(buf, len)
+end
+
+
+-- escape_uri_control_chars percent-encodes control characters (0x00-0x1F and 0x7F,
+-- which include CR and LF) while leaving every other byte untouched. It is used on
+-- parts of $upstream_uri that must keep their query delimiters (?, =, &) but must not
+-- be able to inject CR/LF into the upstream request line.
+function _M.escape_uri_control_chars(uri)
+    return (str_gsub(uri, "[%z\1-\31\127]", function(c)
+        return str_format("%%%02X", str_byte(c))
+    end))
 end
 
 
@@ -211,25 +267,30 @@ function _M.validate_header_value(value)
 end
 
 
+---
+-- Returns the standard host name of the local host.
 -- only use this method in init/init_worker phase.
+--
+-- @function core.utils.gethostname
+-- @treturn string The host name of the local host.
+-- @usage
+-- local hostname = core.utils.gethostname() -- "localhost"
 function _M.gethostname()
     if hostname then
         return hostname
     end
 
-    local hd = io_popen("/bin/hostname")
-    local data, err = hd:read("*a")
-    if err == nil then
-        hostname = data
-        if string.has_suffix(hostname, "\r\n") then
-            hostname = sub_str(hostname, 1, -3)
-        elseif string.has_suffix(hostname, "\n") then
-            hostname = sub_str(hostname, 1, -2)
-        end
+    local size = 256
+    local buf = ffi_new("unsigned char[?]", size)
+
+    local res = C.gethostname(buf, size)
+    if res == 0 then
+        local data = ffi_string(buf, size)
+        hostname = str_gsub(data, "%z+$", "")
 
     else
         hostname = "unknown"
-        log.error("failed to read output of \"/bin/hostname\": ", err)
+        log.error("failed to call gethostname(): ", ffi_string(C.strerror(ffi.errno())))
     end
 
     return hostname
@@ -254,40 +315,420 @@ _M.sleep = sleep
 
 local resolve_var
 do
-    local _ctx
-    local pat = [[(?<!\\)\$(\w+)]]
+    local pat = [[(?<!\\)\$(\{\s*([^}]+?)\s*\}|([\w\.]+))]]
+    -- pureffi: once full, resty.lrucache rehashes its key table on most
+    -- evictions, so a configuration with more templates than fit would pay
+    -- for a rehash on most calls
+    local tpl_cache = lrucache.new(1024)
 
-    local function resolve(m)
-        local v = _ctx[m[1]]
-        if v == nil then
-            return ""
+    -- Split a template into literal strings and variables once, so resolving it
+    -- is a table walk instead of a regex gsub with a callback.
+    local function parse(tpl)
+        local segs = {}
+        local m_ctx = {pos = 1}
+        local last = 1
+        while true do
+            local m, err = re_match(tpl, pat, "jo", m_ctx)
+            if err then
+                return nil, err
+            end
+            if not m then
+                break
+            end
+
+            local from = m_ctx.pos - #m[0]
+            if from > last then
+                segs[#segs + 1] = sub_str(tpl, last, from - 1)
+            end
+
+            local variable = m[2] or m[3]
+            local seg = {name = variable}
+            -- handle the default value with ?? operator
+            if core_str.find(variable, "??") then
+                local parts, err = ngx_re.split(variable, [[\s*\?\?\s*]], "jo")
+                if not parts then
+                    return nil, err
+                end
+                seg.name = parts[1]
+                -- "${a??}" splits into {"a"}, which means no default
+                seg.has_default = #parts ~= 1
+                seg.default = parts[2]
+            end
+            segs[#segs + 1] = seg
+            last = m_ctx.pos
         end
-        return tostring(v)
+
+        if last <= #tpl then
+            segs[#segs + 1] = sub_str(tpl, last)
+        end
+        return segs
     end
 
-    function resolve_var(tpl, ctx)
+    -- no_cache: the template is built per request, so caching it would only
+    -- evict the configured templates
+    function resolve_var(tpl, ctx, escaper, no_cache)
+        local n_resolved = 0
         if not tpl then
-            return tpl
+            return tpl, nil, n_resolved
         end
 
         local from = core_str.find(tpl, "$")
         if not from then
-            return tpl
+            return tpl, nil, n_resolved
         end
 
-        -- avoid creating temporary function
-        _ctx = ctx
-        local res, _, err = re_gsub(tpl, pat, resolve, "jo")
-        _ctx = nil
-        if not res then
-            return nil, err
+        local segs = not no_cache and tpl_cache:get(tpl)
+        if not segs then
+            local err
+            segs, err = parse(tpl)
+            if not segs then
+                return nil, err
+            end
+            if not no_cache then
+                tpl_cache:set(tpl, segs)
+            end
         end
 
-        return res
+        local n = #segs
+        local buf = tablepool.fetch("resolve_var", n, 0)
+        for i = 1, n do
+            local seg = segs[i]
+            if type(seg) == "table" then
+                local v = ctx[seg.name]
+                if v == nil and not seg.has_default then
+                    seg = ""
+                else
+                    if v == nil then
+                        v = seg.default
+                    end
+                    n_resolved = n_resolved + 1
+                    seg = tostring(v)
+                    if escaper then
+                        seg = tostring(escaper(seg))
+                    end
+                end
+            end
+            buf[i] = seg
+        end
+
+        local res = tab_concat(buf, "", 1, n)
+        tablepool.release("resolve_var", buf)
+        return res, nil, n_resolved
     end
 end
 -- Resolve ngx.var in the given string
 _M.resolve_var = resolve_var
+
+
+local resolve_var_with_captures
+do
+    local _captures
+    -- escape is not supported very well, like there is a redundant '\' after escape "$1"
+    local pat = [[ (?<! \\) \$ \{? (\d+) \}? ]]
+
+    local function resolve(m)
+        local v = _captures[tonumber(m[1])]
+        if not v then
+            v = ""
+        end
+        return v
+    end
+
+    -- captures is the match result of regex uri in proxy-rewrite plugin
+    function resolve_var_with_captures(tpl, captures)
+        if not tpl then
+            return tpl, nil
+        end
+
+        local from = core_str.find(tpl, "$")
+        if not from then
+            return tpl, nil
+        end
+
+        captures = captures or {}
+
+        _captures = captures
+        local res, _, err = re_gsub(tpl, pat, resolve, "jox")
+        _captures = nil
+        if not res then
+            return nil, err
+        end
+
+        return res, nil
+    end
+end
+-- Resolve {$1, $2, ...} in the given string
+_M.resolve_var_with_captures = resolve_var_with_captures
+
+
+-- if `str` is a string containing period `some_plugin.some_field.nested_field`
+-- return the table that contains `nested_field` in its root level
+-- else return the original table `conf`
+local function get_root_conf(str, conf, field)
+    -- if the string contains periods, get the splits in `it` iterator
+    local it, _ = re_gmatch(str, [[([^\.]+)]])
+    if not it then
+        return conf, field
+    end
+
+    -- add the splits into a table
+    local matches = {}
+    while true do
+        local m, _ = it()
+        if not m then
+            break
+        end
+        table.insert(matches, m[0])
+    end
+
+    -- get to the table that holds the last field
+    local num_of_matches = #matches
+    for i = 1, num_of_matches - 1 , 1 do
+        conf = conf[matches[i]]
+        if type(conf) ~= "table" then
+            return nil, nil
+        end
+    end
+
+    -- return the table and the last field
+    return conf, matches[num_of_matches]
+end
+
+
+local function find_and_log(field, plugin_name, value)
+    local match, err = re_match(value, "^https")
+    if not match and not err then
+        log.warn("Using ", plugin_name, " " , field, " with no TLS is a security risk")
+    end
+end
+
+
+function _M.check_https(fields, conf, plugin_name)
+    for _, field in ipairs(fields) do
+
+        local new_conf, new_field = get_root_conf(field, conf)
+        if not new_conf then
+            goto continue
+        end
+
+        local value = new_conf[new_field]
+        if not value then
+            goto continue
+        end
+
+        if type(value) == "table" then
+            for _, v in ipairs(value) do
+                find_and_log(field, plugin_name, v)
+            end
+        else
+            find_and_log(field, plugin_name, value)
+        end
+
+        ::continue::
+    end
+end
+
+
+function _M.check_tls_bool(fields, conf, plugin_name)
+    for i, field in ipairs(fields) do
+
+        local new_conf, new_field = get_root_conf(field, conf)
+        if not new_conf then
+            return
+        end
+
+        local value = new_conf[new_field]
+
+        if value ~= true and value ~= nil then
+            log.warn("Keeping ", field, " disabled in ",
+                     plugin_name, " configuration is a security risk")
+        end
+    end
+end
+
+
+local function to_ms(seconds)
+    if seconds == nil then
+        return json.null
+    end
+    return math_floor(seconds * 1000 + 0.5)
+end
+
+
+local function round(value, scale)
+    return math_floor(value * scale + 0.5) / scale
+end
+
+
+local function or_null(value)
+    if value == nil then
+        return json.null
+    end
+    return value
+end
+
+
+local function current_window_info(detail)
+    local window_size = detail.window_size
+    if detail.window_type ~= "sliding" then
+        local window_end = detail.window_end
+        return {
+            start_ms = to_ms(window_end and window_end - window_size),
+            end_ms = to_ms(window_end),
+            count = or_null(detail.count),
+            created = or_null(detail.created),
+        }
+    end
+
+    -- sliding windows are aligned to the clock: the window containing
+    -- `window_now` is the id-th one since the epoch, and the previous window's
+    -- count is weighted by the share of it still inside the sliding range
+    local window_now = detail.window_now
+    local last_count = detail.last_count
+    local id, window_start, weight
+    if window_now then
+        id = math_floor(window_now / window_size)
+        window_start = id * window_size
+        weight = (window_size - window_now % window_size) / window_size
+    end
+
+    return {
+        id = or_null(id),
+        start_ms = to_ms(window_start),
+        end_ms = to_ms(window_start and window_start + window_size),
+        count = or_null(detail.count),
+    }, {
+        count = or_null(last_count),
+        weight = weight and round(weight, 1e6) or json.null,
+        weighted_count = (weight and last_count) and round(last_count * weight, 1e3)
+                         or json.null,
+    }
+end
+
+
+-- `detail` (optional) describes the window the request was counted in, see
+-- the $rate_limiting_info section of the limit-count plugin docs
+function _M.set_var_rate_limiting_info(ctx, key, limit, remaining, reset, detail)
+    if not ctx then
+        return
+    end
+
+    local info = {
+        rate_limiting_key = tostring(key or ""),
+        rate_limiting_limit = math_floor(limit or 0),
+        rate_limiting_remaining = math_floor(tonumber(remaining) or 0),
+        rate_limiting_reset = math_floor(reset or 0),
+    }
+
+    if detail then
+        info.window_type = detail.window_type
+        info.window_size_ms = to_ms(detail.window_size)
+        info.decision = detail.decision
+        if detail.decision ~= "error" then
+            info.cost = detail.cost
+            info.evaluated_at_ms = to_ms(detail.now)
+            local delayed = detail.delayed_sync
+            if delayed then
+                info.delayed_sync = {
+                    synced_at_ms = to_ms(delayed.synced_at),
+                    synced_count = or_null(delayed.synced_count),
+                    local_delta = or_null(delayed.local_delta),
+                }
+            end
+            info.current_window, info.previous_window = current_window_info(detail)
+        end
+    end
+
+    ctx.var.rate_limiting_info = json.encode(info)
+end
+
+
+local hex_byte = {}
+for i = 0, 255 do
+    hex_byte[i] = str_format("%02x", i)
+end
+
+
+local function random_hex_byte()
+    return hex_byte[math_random(0, 255)]
+end
+
+
+---
+-- Generate a random UUID v4 string.
+--
+-- Draws the same bytes in the same order as resty.jit-uuid's generate_v4, so
+-- a given seed yields the same id, but encodes them through a lookup table.
+--
+-- @function core.utils.generate_uuid_v4
+-- @treturn string UUID v4 string, e.g. "1f3a9c2e-7b4d-4e8f-9a6b-2c1d0e5f7a3b"
+function _M.generate_uuid_v4()
+    return random_hex_byte() .. random_hex_byte() .. random_hex_byte()
+           .. random_hex_byte() .. "-" .. random_hex_byte() .. random_hex_byte() .. "-"
+           .. hex_byte[bit.bor(bit.band(math_random(0, 255), 0x0F), 0x40)]
+           .. random_hex_byte() .. "-"
+           .. hex_byte[bit.bor(bit.band(math_random(0, 255), 0x3F), 0x80)]
+           .. random_hex_byte() .. "-" .. random_hex_byte() .. random_hex_byte()
+           .. random_hex_byte() .. random_hex_byte() .. random_hex_byte()
+           .. random_hex_byte()
+end
+
+
+-- worker-local monotonic state for UUID v7 (no shared dict needed)
+-- Each nginx worker has its own copy; no locking required.
+local _v7_last_ms = 0
+local _v7_seq     = 0
+local _v7_rand_b  = { 0, 0, 0, 0, 0, 0, 0 }  -- 7 bytes = 56 random bits
+
+
+local function _v7_reset(ms)
+    _v7_last_ms = ms
+    _v7_seq = 0
+    for i = 1, 7 do
+        _v7_rand_b[i] = math_random(0, 255)
+    end
+end
+
+
+function _M.generate_uuid_v7()
+    local ms = math_floor(ngx_now() * 1000)
+
+    if ms > _v7_last_ms then
+        _v7_reset(ms)
+    else
+        if ms < _v7_last_ms then
+            ms = _v7_last_ms
+        end
+
+        _v7_seq = _v7_seq + 1
+        if _v7_seq > 0x3ffff then
+            repeat
+                ngx_update_time()
+                ms = math_floor(ngx_now() * 1000)
+            until ms > _v7_last_ms
+            _v7_reset(ms)
+        end
+    end
+
+    local ts_hi = math_floor(ms / 0x100000000)
+    local ts_lo = ms % 0x100000000
+
+    local seq_hi = bit.rshift(_v7_seq, 6)
+    local seq_lo = bit.band(_v7_seq, 0x3F)
+
+    local r = _v7_rand_b
+    return str_format(
+        "%02x%02x%04x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+        bit.rshift(ts_hi, 8),
+        bit.band(ts_hi, 0xFF),
+        bit.rshift(ts_lo, 16),
+        bit.band(ts_lo, 0xFFFF),
+        bit.bor(0x7000, seq_hi),
+        bit.bor(0x80, seq_lo),
+        r[1],
+        r[2], r[3], r[4], r[5], r[6], r[7]
+    )
+end
 
 
 return _M

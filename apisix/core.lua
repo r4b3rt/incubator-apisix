@@ -21,31 +21,50 @@ if not local_conf then
     error("failed to parse yaml config: " .. err)
 end
 
-local config_center = local_conf.apisix and local_conf.apisix.config_center
+local config_provider = local_conf.deployment and local_conf.deployment.config_provider
                       or "etcd"
-log.info("use config_center: ", config_center)
-local config = require("apisix.core.config_" .. config_center)
-config.type = config_center
+log.info("use config_provider: ", config_provider)
+
+local config
+-- Currently, we handle JSON parsing in config_yaml, so special processing is needed here.
+if config_provider == "json" then
+    config = require("apisix.core.config_yaml")
+    config.file_type = "json"
+else
+    config = require("apisix.core.config_" .. config_provider)
+end
+
+config.type = config_provider
 
 
 return {
-    version  = require("apisix.core.version"),
-    log      = log,
-    config   = config,
-    sleep    = utils.sleep,
-    json     = require("apisix.core.json"),
-    table    = require("apisix.core.table"),
-    request  = require("apisix.core.request"),
-    response = require("apisix.core.response"),
-    lrucache = require("apisix.core.lrucache"),
-    schema   = require("apisix.schema_def"),
-    string   = require("apisix.core.string"),
-    ctx      = require("apisix.core.ctx"),
-    timer    = require("apisix.core.timer"),
-    id       = require("apisix.core.id"),
-    utils    = utils,
-    etcd     = require("apisix.core.etcd"),
-    http     = require("apisix.core.http"),
-    tablepool= require("tablepool"),
-    empty_tab= {},
+    version     = require("apisix.core.version"),
+    log         = log,
+    config      = config,
+    config_util = require("apisix.core.config_util"),
+    sleep       = utils.sleep,
+    json        = require("apisix.core.json"),
+    table       = require("apisix.core.table"),
+    request     = require("apisix.core.request"),
+    response    = require("apisix.core.response"),
+    lrucache    = require("apisix.core.lrucache"),
+    schema      = require("apisix.core.schema"),
+    string      = require("apisix.core.string"),
+    ctx         = require("apisix.core.ctx"),
+    timer       = require("apisix.core.timer"),
+    id          = require("apisix.core.id"),
+    ip          = require("apisix.core.ip"),
+    io          = require("apisix.core.io"),
+    utils       = utils,
+    dns_client  = require("apisix.core.dns.client"),
+    etcd        = require("apisix.core.etcd"),
+    tablepool   = require("tablepool"),
+    resolver    = require("apisix.core.resolver"),
+    os          = require("apisix.core.os"),
+    pubsub      = require("apisix.core.pubsub"),
+    math        = require("apisix.core.math"),
+    event       = require("apisix.core.event"),
+    env         = require("apisix.core.env"),
+    data_encryption = require("apisix.core.data_encryption"),
+    websocket   = require("apisix.core.websocket"),
 }

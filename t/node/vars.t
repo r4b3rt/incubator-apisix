@@ -54,8 +54,6 @@ __DATA__
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -65,8 +63,6 @@ GET /not_found
 --- error_code: 404
 --- response_body
 {"error_msg":"404 Route Not Found"}
---- no_error_log
-[error]
 
 
 
@@ -76,8 +72,6 @@ GET /hello?k=not-hit
 --- error_code: 404
 --- response_body
 {"error_msg":"404 Route Not Found"}
---- no_error_log
-[error]
 
 
 
@@ -86,8 +80,6 @@ GET /hello?k=not-hit
 GET /hello?k=v
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
@@ -120,8 +112,6 @@ hello world
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -131,8 +121,6 @@ GET /hello
 --- error_code: 404
 --- response_body
 {"error_msg":"404 Route Not Found"}
---- no_error_log
-[error]
 
 
 
@@ -144,8 +132,6 @@ GET /hello
 --- error_code: 404
 --- response_body
 {"error_msg":"404 Route Not Found"}
---- no_error_log
-[error]
 
 
 
@@ -156,8 +142,6 @@ Cookie: k=v; kkk=vvv;
 GET /hello
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
@@ -190,8 +174,6 @@ hello world
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -201,8 +183,6 @@ GET /hello
 --- error_code: 404
 --- response_body
 {"error_msg":"404 Route Not Found"}
---- no_error_log
-[error]
 
 
 
@@ -214,8 +194,6 @@ GET /hello
 --- error_code: 404
 --- response_body
 {"error_msg":"404 Route Not Found"}
---- no_error_log
-[error]
 
 
 
@@ -226,8 +204,6 @@ k: v
 GET /hello
 --- response_body
 hello world
---- no_error_log
-[error]
 
 
 
@@ -260,8 +236,6 @@ hello world
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -271,8 +245,6 @@ GET /hello
 --- error_code: 404
 --- response_body
 {"error_msg":"404 Route Not Found"}
---- no_error_log
-[error]
 
 
 
@@ -284,8 +256,6 @@ GET /hello
 --- error_code: 404
 --- response_body
 {"error_msg":"404 Route Not Found"}
---- no_error_log
-[error]
 
 
 
@@ -297,5 +267,77 @@ k: header
 GET /hello?k=uri_arg
 --- response_body
 hello world
---- no_error_log
-[error]
+
+
+
+=== TEST 17: set route(only post arg)
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                ngx.HTTP_PUT,
+                [=[{
+                    "uri": "/hello",
+                    "vars": [["post_arg_k", "==", "post_form"]],
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    }
+                }]=]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 18: not_found (GET request)
+--- request
+GET /hello
+--- error_code: 404
+--- response_body
+{"error_msg":"404 Route Not Found"}
+
+
+
+=== TEST 19: not_found (wrong request body)
+--- request
+POST /hello
+123
+--- error_code: 404
+--- response_body
+{"error_msg":"404 Route Not Found"}
+
+
+
+=== TEST 20: not_found (wrong content type)
+--- request
+POST /hello
+k=post_form
+--- more_headers
+Content-Type: multipart/form-data
+--- error_code: 404
+--- response_body
+{"error_msg":"404 Route Not Found"}
+
+
+
+=== TEST 21: hit routes
+--- request
+POST /hello
+k=post_form
+--- more_headers
+Content-Type: application/x-www-form-urlencoded
+--- response_body
+hello world

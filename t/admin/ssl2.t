@@ -48,7 +48,7 @@ __DATA__
             local ssl_cert = t.read_file("t/certs/apisix.crt")
             local ssl_key =  t.read_file("t/certs/apisix.key")
             local data = {cert = ssl_cert, key = ssl_key, sni = "not-unwanted-post.com"}
-            local code, message, res = t.test('/apisix/admin/ssl',
+            local code, message, res = t.test('/apisix/admin/ssls',
                 ngx.HTTP_POST,
                 json.encode(data)
             )
@@ -60,16 +60,23 @@ __DATA__
             end
 
             res = json.decode(res)
-            res.node.key = nil
-            res.node.value.create_time = nil
-            res.node.value.update_time = nil
-            res.node.value.cert = ""
-            res.node.value.key = ""
+            assert(res.key ~= nil)
+            res.key = nil
+            assert(res.value.create_time ~= nil)
+            res.value.create_time = nil
+            assert(res.value.update_time ~= nil)
+            res.value.update_time = nil
+            assert(res.value.cert ~= nil)
+            res.value.cert = ""
+            assert(res.value.key ~= nil)
+            res.value.key = ""
+            assert(res.value.id ~= nil)
+            res.value.id = nil
             ngx.say(json.encode(res))
         }
     }
 --- response_body
-{"action":"create","node":{"value":{"cert":"","key":"","sni":"not-unwanted-post.com","status":1}}}
+{"value":{"cert":"","key":"","sni":"not-unwanted-post.com"}}
 
 
 
@@ -82,7 +89,7 @@ __DATA__
             local ssl_cert = t.read_file("t/certs/apisix.crt")
             local ssl_key =  t.read_file("t/certs/apisix.key")
             local data = {cert = ssl_cert, key = ssl_key, sni = "test.com"}
-            local code, message, res = t.test('/apisix/admin/ssl/1',
+            local code, message, res = t.test('/apisix/admin/ssls/1',
                 ngx.HTTP_PUT,
                 json.encode(data)
             )
@@ -94,15 +101,19 @@ __DATA__
             end
 
             res = json.decode(res)
-            res.node.value.create_time = nil
-            res.node.value.update_time = nil
-            res.node.value.cert = ""
-            res.node.value.key = ""
+            assert(res.value.create_time ~= nil)
+            res.value.create_time = nil
+            assert(res.value.update_time ~= nil)
+            res.value.update_time = nil
+            assert(res.value.cert ~= nil)
+            res.value.cert = ""
+            assert(res.value.key ~= nil)
+            res.value.key = ""
             ngx.say(json.encode(res))
         }
     }
 --- response_body
-{"action":"set","node":{"key":"/apisix/ssl/1","value":{"cert":"","id":"1","key":"","sni":"test.com","status":1}}}
+{"key":"/apisix/ssls/1","value":{"cert":"","id":"1","key":"","sni":"test.com"}}
 
 
 
@@ -115,7 +126,7 @@ __DATA__
             local ssl_cert = t.read_file("t/certs/apisix.crt")
             local ssl_key =  t.read_file("t/certs/apisix.key")
             local data = {cert = ssl_cert, key = ssl_key, sni = "t.com"}
-            local code, message, res = t.test('/apisix/admin/ssl/1',
+            local code, message, res = t.test('/apisix/admin/ssls/1',
                 ngx.HTTP_PATCH,
                 json.encode(data)
             )
@@ -127,15 +138,19 @@ __DATA__
             end
 
             res = json.decode(res)
-            res.node.value.create_time = nil
-            res.node.value.update_time = nil
-            res.node.value.cert = ""
-            res.node.value.key = ""
+            assert(res.value.create_time ~= nil)
+            res.value.create_time = nil
+            assert(res.value.update_time ~= nil)
+            res.value.update_time = nil
+            assert(res.value.cert ~= nil)
+            res.value.cert = ""
+            assert(res.value.key ~= nil)
+            res.value.key = ""
             ngx.say(json.encode(res))
         }
     }
 --- response_body
-{"action":"compareAndSwap","node":{"key":"/apisix/ssl/1","value":{"cert":"","id":"1","key":"","sni":"t.com","status":1}}}
+{"key":"/apisix/ssls/1","value":{"cert":"","id":"1","key":"","sni":"t.com"}}
 
 
 
@@ -145,10 +160,7 @@ __DATA__
         content_by_lua_block {
             local json = require("toolkit.json")
             local t = require("lib.test_admin")
-            local ssl_cert = t.read_file("t/certs/apisix.crt")
-            local ssl_key =  t.read_file("t/certs/apisix.key")
-            local data = {cert = ssl_cert, key = ssl_key, sni = "test.com"}
-            local code, message, res = t.test('/apisix/admin/ssl/1',
+            local code, message, res = t.test('/apisix/admin/ssls/1',
                 ngx.HTTP_GET
             )
 
@@ -159,15 +171,22 @@ __DATA__
             end
 
             res = json.decode(res)
-            res.node.value.create_time = nil
-            res.node.value.update_time = nil
-            res.node.value.cert = ""
-            res.node.value.key = ""
+            assert(res.createdIndex ~= nil)
+            res.createdIndex = nil
+            assert(res.modifiedIndex ~= nil)
+            res.modifiedIndex = nil
+            assert(res.value.create_time ~= nil)
+            res.value.create_time = nil
+            assert(res.value.update_time ~= nil)
+            res.value.update_time = nil
+            assert(res.value.cert ~= nil)
+            res.value.cert = ""
+            assert(res.value.key == nil)
             ngx.say(json.encode(res))
         }
     }
 --- response_body
-{"action":"get","count":"1","node":{"key":"/apisix/ssl/1","value":{"cert":"","id":"1","key":"","sni":"t.com","status":1}}}
+{"key":"/apisix/ssls/1","value":{"cert":"","id":"1","sni":"t.com"}}
 
 
 
@@ -180,7 +199,7 @@ __DATA__
             local ssl_cert = t.read_file("t/certs/apisix.crt")
             local ssl_key =  t.read_file("t/certs/apisix.key")
             local data = {cert = ssl_cert, key = ssl_key, sni = "test.com"}
-            local code, message, res = t.test('/apisix/admin/ssl/1',
+            local code, message, res = t.test('/apisix/admin/ssls/1',
                 ngx.HTTP_DELETE
             )
 
@@ -195,7 +214,7 @@ __DATA__
         }
     }
 --- response_body
-{"action":"delete","deleted":"1","key":"/apisix/ssl/1","node":{}}
+{"deleted":"1","key":"/apisix/ssls/1"}
 
 
 
@@ -212,7 +231,7 @@ BAYTAkNOMRIwEAYDVQQIDAlHdWFuZ0RvbmcxDzANBgNVBAcMBlpodUhhaTEPMA0G
 U/OOcSRr39Kuis/JJ+DkgHYa/PWHZhnJQBxcqXXk1bJGw9BNbhM=
 -----END CERTIFICATE-----
             ]], key = ssl_key, sni = "test.com"}
-            local code, message, res = t.test('/apisix/admin/ssl/1',
+            local code, message, res = t.test('/apisix/admin/ssls/1',
                 ngx.HTTP_PUT,
                 json.encode(data)
             )
@@ -245,7 +264,7 @@ MIIG5AIBAAKCAYEAyCM0rqJecvgnCfOw4fATotPwk5Ba0gC2YvIrO+gSbQkyxXF5
 jhZB3W6BkWUWR4oNFLLSqcVbVDPitz/Mt46Mo8amuS6zTbQetGnBARzPLtmVhJfo
 wzarryret/7GFW1/3cz+hTj9/d45i25zArr3Pocfpur5mfz3fJO8jg==
 -----END RSA PRIVATE KEY-----]], sni = "test.com"}
-            local code, message, res = t.test('/apisix/admin/ssl/1',
+            local code, message, res = t.test('/apisix/admin/ssls/1',
                 ngx.HTTP_PUT,
                 json.encode(data)
             )
@@ -283,7 +302,7 @@ U/OOcSRr39Kuis/JJ+DkgHYa/PWHZhnJQBxcqXXk1bJGw9BNbhM=
                 },
                 keys = {ssl_key}
             }
-            local code, message, res = t.test('/apisix/admin/ssl/1',
+            local code, message, res = t.test('/apisix/admin/ssls/1',
                 ngx.HTTP_PUT,
                 json.encode(data)
             )
@@ -319,7 +338,7 @@ jhZB3W6BkWUWR4oNFLLSqcVbVDPitz/Mt46Mo8amuS6zTbQetGnBARzPLtmVhJfo
 wzarryret/7GFW1/3cz+hTj9/d45i25zArr3Pocfpur5mfz3fJO8jg==
 -----END RSA PRIVATE KEY-----]]}
             }
-            local code, message, res = t.test('/apisix/admin/ssl/1',
+            local code, message, res = t.test('/apisix/admin/ssls/1',
                 ngx.HTTP_PUT,
                 json.encode(data)
             )
@@ -348,7 +367,7 @@ wzarryret/7GFW1/3cz+hTj9/d45i25zArr3Pocfpur5mfz3fJO8jg==
             local ssl_cert = t.read_file("t/certs/apisix.crt")
             local ssl_key =  t.read_file("t/certs/apisix.key")
             local data = {cert = ssl_cert, key = ssl_key, snis = {}}
-            local code, message, res = t.test('/apisix/admin/ssl/1',
+            local code, message, res = t.test('/apisix/admin/ssls/1',
                 ngx.HTTP_PUT,
                 json.encode(data)
             )
@@ -365,3 +384,113 @@ wzarryret/7GFW1/3cz+hTj9/d45i25zArr3Pocfpur5mfz3fJO8jg==
 --- error_code: 400
 --- response_body
 {"error_msg":"invalid configuration: property \"snis\" validation failed: expect array to have at least 1 items"}
+
+
+
+=== TEST 11: update snis, PATCH with sub path
+--- config
+    location /t {
+        content_by_lua_block {
+            local json = require("toolkit.json")
+            local t = require("lib.test_admin")
+            local ssl_cert = t.read_file("t/certs/apisix.crt")
+            local ssl_key =  t.read_file("t/certs/apisix.key")
+            local data = {cert = ssl_cert, key = ssl_key, snis = {"test.com"}}
+            local code, message, res = t.test('/apisix/admin/ssls/1',
+                ngx.HTTP_PUT,
+                json.encode(data)
+            )
+
+            if code >= 300 then
+                ngx.status = code
+                ngx.say(message)
+                return
+            end
+
+
+            local data = {"update1.com", "update2.com"}
+            local code, message, res = t.test('/apisix/admin/ssls/1/snis',
+                ngx.HTTP_PATCH,
+                json.encode(data)
+            )
+
+            if code >= 300 then
+                ngx.status = code
+                ngx.say(message)
+                return
+            end
+            ngx.say(res)
+        }
+    }
+--- response_body_like eval
+qr/"snis":\["update1.com","update2.com"\]/
+
+
+
+=== TEST 12: PATCH encrypt ssl key
+--- yaml_config
+apisix:
+    node_listen: 1984
+    data_encryption:
+        keyring: "qeddd145sfvddff3"
+--- config
+    location /t {
+        content_by_lua_block {
+            local json = require("toolkit.json")
+            local t = require("lib.test_admin")
+
+            local ssl_cert = t.read_file("t/certs/apisix.crt")
+            local ssl_key =  t.read_file("t/certs/apisix.key")
+            local data = {cert = ssl_cert, key = ssl_key, certs = {ssl_cert}, keys = {ssl_key}}
+            local code, message, res = t.test('/apisix/admin/ssls/1',
+                ngx.HTTP_PATCH,
+                json.encode(data)
+            )
+
+            if code >= 300 then
+                ngx.status = code
+                ngx.say(message)
+                return
+            end
+
+            res = json.decode(res)
+            ngx.say(res.value.key == ssl_key)
+            ngx.say(res.value.keys[1] == ssl_key)
+        }
+    }
+--- response_body
+false
+false
+
+
+
+=== TEST 13: PATCH encrypt ssl key, sub_path
+--- yaml_config
+apisix:
+    node_listen: 1984
+    data_encryption:
+        keyring: "qeddd145sfvddff3"
+--- config
+    location /t {
+        content_by_lua_block {
+            local json = require("toolkit.json")
+            local t = require("lib.test_admin")
+
+            local ssl_key =  t.read_file("t/certs/apisix.key")
+            local code, message, res = t.test('/apisix/admin/ssls/1/keys',
+                ngx.HTTP_PATCH,
+                json.encode({ssl_key})
+            )
+
+            if code >= 300 then
+                ngx.status = code
+                ngx.say(message)
+                return
+            end
+
+            res = json.decode(res)
+            ngx.say(res.value.keys[1] == ssl_key)
+        }
+    }
+--- response_body
+false

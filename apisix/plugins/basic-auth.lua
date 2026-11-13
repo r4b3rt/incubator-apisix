@@ -16,22 +16,27 @@
 --
 local core = require("apisix.core")
 local ngx = ngx
-local ngx_re = require("ngx.re")
-local ipairs = ipairs
 local consumer = require("apisix.consumer")
+local schema_def = require("apisix.schema_def")
+local auth_utils = require("apisix.utils.auth")
+local str_find = string.find
+local str_sub = string.sub
 
 local lrucache = core.lrucache.new({
     ttl = 300, count = 512
-})
-local consumers_lrucache = core.lrucache.new({
-    type = "plugin",
 })
 
 local schema = {
     type = "object",
     title = "work with route or service object",
-    properties = {},
-    additionalProperties = false,
+    properties = {
+        hide_credentials = {
+            type = "boolean",
+            default = false,
+        },
+        realm = schema_def.get_realm_schema("basic"),
+        anonymous_consumer = schema_def.anonymous_consumer_schema,
+    },
 }
 
 local consumer_schema = {
@@ -39,13 +44,14 @@ local consumer_schema = {
     title = "work with consumer object",
     properties = {
         username = { type = "string" },
-        password = { type = "string" },
+        password = { type = "string", minLength = 1 },
     },
+    encrypt_fields = {"password"},
     required = {"username", "password"},
-    additionalProperties = false,
 }
 
 local plugin_name = "basic-auth"
+
 
 local _M = {
     version = 0.1,
@@ -76,25 +82,31 @@ local function extract_auth_header(authorization)
     local function do_extract(auth)
         local obj = { username = "", password = "" }
 
-        local m, err = ngx.re.match(auth, "Basic\\s(.+)", "jo")
+        local m, err = ngx.re.match(auth, "(?i:basic)\\s(.+)", "jo")
         if err then
             -- error authorization
             return nil, err
         end
 
-        local decoded = ngx.decode_base64(m[1])
-
-        local res
-        res, err = ngx_re.split(decoded, ":")
-        if err then
-            return nil, "split authorization err:" .. err
+        if not m then
+            return nil, "Invalid authorization header format"
         end
 
-        obj.username = ngx.re.gsub(res[1], "\\s+", "", "jo")
-        obj.password = ngx.re.gsub(res[2], "\\s+", "", "jo")
-        core.log.info("plugin access phase, authorization: ",
-                      obj.username, ": ", obj.password)
+        local decoded = ngx.decode_base64(m[1])
 
+        if not decoded then
+            return nil, "Failed to decode authentication header: " .. m[1]
+        end
+
+        -- https://www.rfc-editor.org/info/rfc7617/#section-2 Page 4
+        -- RFC 7617: split on the first colon only; the password may contain ':'
+        local sep = str_find(decoded, ":", 1, true)
+        if not sep then
+            return nil, "Split authorization err: invalid decoded data: " .. decoded
+        end
+
+        obj.username = ngx.re.gsub(str_sub(decoded, 1, sep - 1), "\\s+", "", "jo")
+        obj.password = ngx.re.gsub(str_sub(decoded, sep + 1), "\\s+", "", "jo")
         return obj, nil
     end
 
@@ -108,59 +120,71 @@ local function extract_auth_header(authorization)
 
 end
 
-local create_consume_cache
-do
-    local consumer_names = {}
 
-    function create_consume_cache(consumers)
-        core.table.clear(consumer_names)
-
-        for _, cur_consumer in ipairs(consumers.nodes) do
-            core.log.info("consumer node: ",
-                          core.json.delay_encode(cur_consumer))
-            consumer_names[cur_consumer.auth_conf.username] = cur_consumer
-        end
-
-        return consumer_names
-    end
-end
-
-function _M.rewrite(conf, ctx)
-    core.log.info("plugin access phase, conf: ", core.json.delay_encode(conf))
-
-    -- 1. extract authorization from header
+local function find_consumer(ctx)
     local auth_header = core.request.header(ctx, "Authorization")
     if not auth_header then
-        core.response.set_header("WWW-Authenticate", "Basic realm='.'")
-        return 401, { message = "Missing authorization in request" }
+        return nil, nil, "Missing authorization in request"
     end
 
     local username, password, err = extract_auth_header(auth_header)
     if err then
-        return 401, { message = err }
+        if auth_utils.is_running_under_multi_auth(ctx) then
+            return nil, nil, err
+        end
+        core.log.warn(err)
+        return nil, nil, "Invalid authorization in request"
     end
 
-    -- 2. get user info from consumer plugin
-    local consumer_conf = consumer.plugin(plugin_name)
-    if not consumer_conf then
-        return 401, { message = "Missing related consumer" }
-    end
-
-    local consumers = consumers_lrucache("consumers_key",
-        consumer_conf.conf_version,
-        create_consume_cache, consumer_conf)
-
-    -- 3. check user exists
-    local cur_consumer = consumers[username]
+    local cur_consumer, consumer_conf, err = consumer.find_consumer(plugin_name,
+                                             "username", username)
     if not cur_consumer then
-        return 401, { message = "Invalid user key in authorization" }
+        err = "failed to find user: " .. (err or "invalid user")
+        if auth_utils.is_running_under_multi_auth(ctx) then
+            return nil, nil, err
+        end
+        core.log.warn(err)
+        return nil, nil, "Invalid user authorization"
     end
-    core.log.info("consumer: ", core.json.delay_encode(cur_consumer))
+
+    -- the schema rejects an empty password on write and on load, but a secret
+    -- reference ($secret:// or $env://) is resolved after validation and can
+    -- yield "": fail closed so such a consumer never authenticates
+    local expected = cur_consumer.auth_conf.password
+    if expected == "" then
+        err = "empty password configured for consumer: " .. cur_consumer.consumer_name
+        if auth_utils.is_running_under_multi_auth(ctx) then
+            return nil, nil, err
+        end
+        core.log.warn(err)
+        return nil, nil, "Invalid user authorization"
+    end
+
+    if expected ~= password then
+        return nil, nil, "Invalid user authorization"
+    end
+
+    return cur_consumer, consumer_conf, err
+end
 
 
-    -- 4. check the password is correct
-    if cur_consumer.auth_conf.password ~= password then
-        return 401, { message = "Password is error" }
+function _M.rewrite(conf, ctx)
+    local cur_consumer, consumer_conf, err = find_consumer(ctx, conf)
+    if not cur_consumer then
+        if not conf.anonymous_consumer then
+            core.response.set_header("WWW-Authenticate", "Basic realm=\"" .. conf.realm .. "\"")
+            return 401, { message = err }
+        end
+        cur_consumer, consumer_conf, err = consumer.get_anonymous_consumer(conf.anonymous_consumer)
+        if not cur_consumer then
+            err = "basic-auth failed to authenticate the request, code: 401. error: " .. err
+            core.log.error(err)
+            core.response.set_header("WWW-Authenticate", "Basic realm=\"" .. conf.realm .. "\"")
+            return 401, { message = "Invalid user authorization" }
+        end
+    end
+    if conf.hide_credentials then
+        core.request.set_header(ctx, "Authorization", nil)
     end
 
     consumer.attach_consumer(ctx, cur_consumer, consumer_conf)

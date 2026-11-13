@@ -15,44 +15,23 @@
 -- limitations under the License.
 --
 local core = require("apisix.core")
-local schema_plugin = require("apisix.admin.plugins").stream_check_schema
+local resource = require("apisix.admin.resource")
+local apisix_upstream = require("apisix.upstream")
+local stream_route_checker = require("apisix.stream.router.ip_port").stream_route_checker
 local tostring = tostring
+local ipairs = ipairs
+local type = type
 
 
-local _M = {
-    version = 0.1,
-}
-
-
-local function check_conf(id, conf, need_id)
-    if not conf then
-        return nil, {error_msg = "missing configurations"}
-    end
-
-    id = id or conf.id
-    if need_id and not id then
-        return nil, {error_msg = "missing stream route id"}
-    end
-
-    if not need_id and id then
-        return nil, {error_msg = "wrong stream route id, do not need it"}
-    end
-
-    if need_id and conf.id and tostring(conf.id) ~= tostring(id) then
-        return nil, {error_msg = "wrong stream route id"}
-    end
-
-    conf.id = id
-
-    core.log.info("schema: ", core.json.delay_encode(core.schema.stream_route))
-    core.log.info("conf  : ", core.json.delay_encode(conf))
-    local ok, err = core.schema.check(core.schema.stream_route, conf)
+local function check_conf(id, conf, need_id, schema, opts)
+    opts = opts or {}
+    local ok, err = core.schema.check(schema, conf)
     if not ok then
         return nil, {error_msg = "invalid configuration: " .. err}
     end
 
     local upstream_id = conf.upstream_id
-    if upstream_id then
+    if upstream_id and not opts.skip_references_check then
         local key = "/upstreams/" .. upstream_id
         local res, err = core.etcd.get(key)
         if not res then
@@ -68,82 +47,131 @@ local function check_conf(id, conf, need_id)
         end
     end
 
-    if conf.plugins then
-        local ok, err = schema_plugin(conf.plugins)
-        if not ok then
-            return nil, {error_msg = err}
+    local service_id = conf.service_id
+    if service_id and not opts.skip_references_check then
+        local key = "/services/" .. service_id
+        local res, err = core.etcd.get(key)
+        if not res then
+            return nil, {error_msg = "failed to fetch service info by "
+                    .. "service id [" .. service_id .. "]: "
+                    .. err}
+        end
+
+        if res.status ~= 200 then
+            return nil, {error_msg = "failed to fetch service info by "
+                    .. "service id [" .. service_id .. "], "
+                    .. "response code: " .. res.status}
         end
     end
 
-    return need_id and id or true
+    -- the self-reference check needs no lookup, so it stays outside the gate;
+    -- only the etcd fetch below is skipped for standalone validation
+    if conf.protocol and conf.protocol.superior_id then
+        local superior_id = conf.protocol.superior_id
+        if id and tostring(superior_id) == tostring(id) then
+            return nil, {error_msg = "stream route can not set itself as superior_id"}
+        end
+    end
+
+    if conf.protocol and conf.protocol.superior_id and not opts.skip_references_check then
+        local superior_id = conf.protocol.superior_id
+        local key = "/stream_routes/" .. superior_id
+        local res, err = core.etcd.get(key)
+        if not res then
+            return nil, {error_msg = "failed to fetch stream routes[" .. superior_id .. "]: "
+                                     .. err}
+        end
+
+        if res.status ~= 200 then
+            return nil, {error_msg = "failed to fetch stream routes[" .. superior_id
+                                     .. "], response code: " .. res.status}
+        end
+
+        local superior_route = res.body.node.value
+        if type(superior_route) == "string" then
+            local decoded, decode_err = core.json.decode(superior_route)
+            if not decoded then
+                return nil, {error_msg = "failed to decode stream routes[" .. superior_id
+                                         .. "]: " .. decode_err}
+            end
+            superior_route = decoded
+        end
+
+        if superior_route and superior_route.protocol
+           and superior_route.protocol.name ~= conf.protocol.name then
+            return nil, {error_msg = "protocol mismatch: subordinate protocol ["
+                                     .. conf.protocol.name .. "] does not match superior protocol ["
+                                     .. superior_route.protocol.name .. "]"}
+        end
+    end
+
+    local ok, err = stream_route_checker(conf, true)
+    if not ok then
+        return nil, {error_msg = err}
+    end
+
+    return true
 end
 
 
-function _M.put(id, conf)
-    local id, err = check_conf(id, conf, true)
-    if not id then
-        return 400, err
-    end
-
-    local key = "/stream_routes/" .. id
-    local res, err = core.etcd.set(key, conf)
-    if not res then
-        core.log.error("failed to put stream route[", key, "]: ", err)
-        return 500, {error_msg = err}
-    end
-
-    return res.status, res.body
-end
-
-
-function _M.get(id)
+local function delete_checker(id)
     local key = "/stream_routes"
-    if id then
-        key = key .. "/" .. id
-    end
-
-    local res, err = core.etcd.get(key, not id)
+    local res, err = core.etcd.get(key, {prefix = true})
     if not res then
-        core.log.error("failed to get stream route[", key, "]: ", err)
-        return 500, {error_msg = err}
+        return 503, {error_msg = "failed to fetch stream routes: " .. err}
     end
 
-    return res.status, res.body
+    if res.status ~= 200 then
+        return 503, {error_msg = "failed to fetch stream routes, response code: " .. res.status}
+    end
+
+    local nodes = res.body.list
+    if not nodes then
+        if res.body.node and res.body.node.nodes then
+            nodes = res.body.node.nodes
+        end
+    end
+
+    if not nodes then
+        return true
+    end
+
+    for _, item in ipairs(nodes) do
+        local route = item.value
+        if type(route) == "string" then
+            local decoded, decode_err = core.json.decode(route)
+            if not decoded then
+                return 503, {error_msg = "failed to decode stream route [" .. tostring(item.key)
+                                         .. "]: " .. decode_err}
+            end
+            route = decoded
+        end
+
+        if route and route.protocol and tostring(route.protocol.superior_id) == id then
+            return 400, {error_msg = "can not delete this stream route directly, stream route ["
+                                     .. route.id .. "] is still using it as superior_id"}
+        end
+    end
+
+    return true
 end
 
 
-function _M.post(id, conf)
-    local id, err = check_conf(id, conf, false)
-    if not id then
-        return 400, err
-    end
-
-    local key = "/stream_routes"
-    local res, err = core.etcd.push("/stream_routes", conf)
-    if not res then
-        core.log.error("failed to post stream route[", key, "]: ", err)
-        return 500, {error_msg = err}
-    end
-
-    return res.status, res.body
+local function encrypt_conf(id, conf)
+    apisix_upstream.encrypt_conf(conf.upstream)
 end
 
 
-function _M.delete(id)
-    if not id then
-        return 400, {error_msg = "missing stream route id"}
-    end
-
-    local key = "/stream_routes/" .. id
-    -- core.log.info("key: ", key)
-    local res, err = core.etcd.delete(key)
-    if not res then
-        core.log.error("failed to delete stream route[", key, "]: ", err)
-        return 500, {error_msg = err}
-    end
-
-    return res.status, res.body
-end
-
-
-return _M
+return resource.new({
+    name = "stream_routes",
+    kind = "stream route",
+    schema = core.schema.stream_route,
+    checker = check_conf,
+    delete_checker = delete_checker,
+    encrypt_conf = encrypt_conf,
+    unsupported_methods = { "patch" },
+    list_filter_fields = {
+        service_id = true,
+        upstream_id = true,
+    },
+})

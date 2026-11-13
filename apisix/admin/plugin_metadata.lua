@@ -14,14 +14,13 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 --
-local error   = error
 local pcall   = pcall
 local require = require
 local core    = require("apisix.core")
-local api_router = require("apisix.api_router")
+local resource = require("apisix.admin.resource")
+local plugin_encrypt_conf = require("apisix.plugin").encrypt_conf
 
-local _M = {
-}
+local injected_mark = "injected metadata_schema"
 
 
 local function validate_plugin(name)
@@ -36,6 +35,17 @@ local function validate_plugin(name)
 end
 
 
+local function inject_metadata_schema(plugin_object)
+    if not plugin_object.metadata_schema then
+        plugin_object.metadata_schema = {
+            type = "object",
+            ['$comment'] = injected_mark,
+            properties = {},
+        }
+    end
+end
+
+
 local function check_conf(plugin_name, conf)
     if not plugin_name then
         return nil, {error_msg = "missing plugin name"}
@@ -46,31 +56,20 @@ local function check_conf(plugin_name, conf)
         return nil, {error_msg = "invalid plugin name"}
     end
 
-    if not conf then
-        return nil, {error_msg = "missing configurations"}
-    end
+    inject_metadata_schema(plugin_object)
 
-    local schema = plugin_object.metadata_schema or {
-        type = "object",
-        properties = {},
-    }
-    if not schema.properties then
-        schema.properties = {
-            additionalProperties = false,
-        }
-    end
+    local schema = plugin_object.metadata_schema
 
-    -- inject interceptors schema to each plugins
-    if schema.properties.interceptors
-      and api_router.interceptors_schema['$comment'] ~= schema.properties.interceptors['$comment']
+    local ok, err
+    if schema['$comment'] == injected_mark
+      -- check_schema is not required. If missing, fallback to check schema directly
+      or not plugin_object.check_schema
     then
-        error("'interceptors' can not be used as the name of metadata schema's field")
+        ok, err = core.schema.check(schema, conf)
+    else
+        ok, err = plugin_object.check_schema(conf, core.schema.TYPE_METADATA)
     end
-    schema.properties.interceptors = api_router.interceptors_schema
 
-    core.log.info("schema: ", core.json.delay_encode(schema))
-    core.log.info("conf  : ", core.json.delay_encode(conf))
-    local ok, err = core.schema.check(schema, conf)
     if not ok then
         return nil, {error_msg = "invalid configuration: " .. err}
     end
@@ -78,60 +77,37 @@ local function check_conf(plugin_name, conf)
     return plugin_name
 end
 
-
-function _M.put(plugin_name, conf)
-    local plugin_name, err = check_conf(plugin_name, conf)
+local function encrypt_conf(plugin_name, conf)
     if not plugin_name then
-        return 400, err
+        -- This situation shouldn't happen according to the execution order.
+        core.log.info("missing plugin name")
+        return
     end
 
-    local key = "/plugin_metadata/" .. plugin_name
-    core.log.info("key: ", key)
-    local res, err = core.etcd.set(key, conf)
-    if not res then
-        core.log.error("failed to put plugin metadata[", key, "]: ", err)
-        return 500, {error_msg = err}
+    local ok, plugin_object = validate_plugin(plugin_name)
+    if not ok then
+        -- This situation shouldn't happen according to the execution order.
+        core.log.info("invalid plugin name")
+        return
     end
 
-    return res.status, res.body
+    inject_metadata_schema(plugin_object)
+
+    local schema = plugin_object.metadata_schema
+    -- encrypt whenever the plugin has a real metadata schema; do not gate on
+    -- check_schema, or a plugin that validates via core.schema.check would leak
+    -- its metadata encrypt_fields in plaintext
+    if schema['$comment'] ~= injected_mark then
+        plugin_encrypt_conf(plugin_name, conf, core.schema.TYPE_METADATA)
+    end
 end
 
 
-function _M.get(key)
-    local path = "/plugin_metadata"
-    if key then
-        path = path .. "/" .. key
-    end
-
-    local res, err = core.etcd.get(path, not key)
-    if not res then
-        core.log.error("failed to get metadata[", key, "]: ", err)
-        return 500, {error_msg = err}
-    end
-
-    return res.status, res.body
-end
-
-
-function _M.post(key, conf)
-    return 405, {error_msg = "not supported `POST` method for metadata"}
-end
-
-
-function _M.delete(key)
-    if not key then
-        return 400, {error_msg = "missing metadata key"}
-    end
-
-    local key = "/plugin_metadata/" .. key
-    local res, err = core.etcd.delete(key)
-    if not res then
-        core.log.error("failed to delete metadata[", key, "]: ", err)
-        return 500, {error_msg = err}
-    end
-
-    return res.status, res.body
-end
-
-
-return _M
+return resource.new({
+    name = "plugin_metadata",
+    kind = "plugin_metadata",
+    schema = core.schema.plugin_metadata,
+    checker = check_conf,
+    encrypt_conf = encrypt_conf,
+    unsupported_methods = {"post", "patch"}
+})

@@ -30,6 +30,26 @@ repeat_each(1);
 no_long_string();
 no_shuffle();
 no_root_location();
+
+add_block_preprocessor(sub {
+    my ($block) = @_;
+
+    if (!$block->request) {
+        $block->set_value("request", "GET /t");
+    }
+
+    if (!$block->error_log && !$block->no_error_log) {
+        $block->set_value("no_error_log", "[error]\n[alert]");
+    }
+
+    my $extra_init_worker_by_lua = $block->extra_init_worker_by_lua // "";
+    $extra_init_worker_by_lua .= <<_EOC_;
+        require("lib.test_redis").flush_all({password = "foobared"})
+_EOC_
+
+    $block->set_value("extra_init_worker_by_lua", $extra_init_worker_by_lua);
+});
+
 run_tests;
 
 __DATA__
@@ -67,13 +87,9 @@ __DATA__
             ngx.print(body)
         }
     }
---- request
-GET /t
 --- error_code: 400
 --- response_body
-{"error_msg":"failed to check the configuration of plugin limit-count err: failed to validate dependent schema for \"policy\": value should match only one schema, but matches none"}
---- no_error_log
-[error]
+{"error_msg":"failed to check the configuration of plugin limit-count err: then clause did not match"}
 
 
 
@@ -113,12 +129,8 @@ GET /t
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -147,33 +159,6 @@ passed
                         },
                         "type": "roundrobin"
                     }
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                                "limit-count": {
-                                    "count": 2,
-                                    "time_window": 60,
-                                    "rejected_code": 503,
-                                    "key": "remote_addr",
-                                    "policy": "redis",
-                                    "redis_host": "127.0.0.1",
-                                    "redis_port": 6379,
-                                    "redis_timeout": 1000
-                                }
-                            },
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1980": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "uri": "/hello"
-                        },
-                        "key": "/apisix/routes/1"
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -183,23 +168,14 @@ passed
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
 === TEST 4: up the limit
 --- request
 GET /hello
---- no_error_log
-[error]
---- error_log
-try to lock with key route#1#redis
-unlock with key route#1#redis
 
 
 
@@ -207,9 +183,7 @@ unlock with key route#1#redis
 --- pipelined_requests eval
 ["GET /hello", "GET /hello", "GET /hello"]
 --- error_code eval
-[200, 503, 503]
---- no_error_log
-[error]
+[200, 200, 503]
 
 
 
@@ -217,13 +191,45 @@ unlock with key route#1#redis
 --- pipelined_requests eval
 ["GET /hello1", "GET /hello", "GET /hello2", "GET /hello", "GET /hello"]
 --- error_code eval
-[404, 503, 404, 503, 503]
---- no_error_log
-[error]
+[404, 200, 404, 200, 503]
 
 
 
-=== TEST 7: set route, with redis host, port and right password
+=== TEST 7: flush redis script cache
+--- config
+    location /t {
+        content_by_lua_block {
+            local redis = require("resty.redis")
+            local red = redis:new()
+            red:set_timeout(1000)
+            local ok, err = red:connect("127.0.0.1", 6379)
+            if not ok then
+                ngx.say("failed to connect: ", err)
+                return
+            end
+            red:script("FLUSH")
+            red:flushall()
+            red:set_keepalive(10000, 100)
+            ngx.say("done")
+        }
+    }
+--- response_body
+done
+
+
+
+=== TEST 8: evalsha NOSCRIPT fallback after SCRIPT FLUSH
+--- request
+GET /hello
+--- error_code: 200
+--- grep_error_log eval
+qr/redis evalsha failed:.*Falling back to eval/
+--- grep_error_log_out
+redis evalsha failed: NOSCRIPT No matching script. Please use EVAL.. Falling back to eval
+
+
+
+=== TEST 9: set route, with redis host, port and right password
 --- config
     location /t {
         content_by_lua_block {
@@ -251,14 +257,7 @@ unlock with key route#1#redis
             local count
             count, err = red:get_reused_times()
             if 0 == count then
-                local res, err = red:eval([[
-                    local key = 'requirepass'
-                    local value = "foobared"
-                    -- redis.replicate_commands()
-                    local val = redis.pcall('CONFIG', 'SET', key, value)
-                    return val
-                    ]], 0)
-                --
+                local res, err = red:config('set', 'requirepass', 'foobared')
                 if not res then
                     ngx.say("failed to set: ", err)
                     return
@@ -300,36 +299,28 @@ unlock with key route#1#redis
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 8: up the limit
+=== TEST 10: up the limit
 --- pipelined_requests eval
 ["GET /hello", "GET /hello", "GET /hello", "GET /hello"]
 --- error_code eval
 [200, 200, 503, 503]
---- no_error_log
-[error]
 
 
 
-=== TEST 9: up the limit
+=== TEST 11: up the limit
 --- pipelined_requests eval
 ["GET /hello1", "GET /hello", "GET /hello2", "GET /hello", "GET /hello"]
 --- error_code eval
-[404, 503, 404, 503, 503]
---- no_error_log
-[error]
+[404, 200, 404, 200, 503]
 
 
 
-=== TEST 10: set route, with redis host, port and wrong password
+=== TEST 12: set route, with redis host, port and wrong password
 --- config
     location /t {
         content_by_lua_block {
@@ -366,36 +357,200 @@ passed
             ngx.print(body)
         }
     }
---- request
-GET /t
 --- error_code eval
 200
---- no_error_log
-[error]
 
 
 
-=== TEST 11: request for TEST 10
+=== TEST 13: request for TEST 10
 --- request
 GET /hello_new
 --- error_code eval
 500
---- response_body
-{"error_msg":"failed to limit count: ERR invalid password"}
 --- error_log
-failed to limit req: ERR invalid password
+failed to limit count: WRONGPASS invalid username-password pair or user is disabled
 
 
 
-=== TEST 12: multi request for TEST 10
+=== TEST 14: multi request for TEST 10
 --- pipelined_requests eval
 ["GET /hello_new", "GET /hello1", "GET /hello1", "GET /hello_new"]
+--- no_error_log
+[alert]
 --- error_code eval
 [500, 404, 404, 500]
 
 
 
-=== TEST 13: restore redis password to ''
+=== TEST 15: set route, with redis host, port and bad username and good password
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+
+            local code, body = t('/apisix/admin/routes/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "uri": "/hello",
+                    "plugins": {
+                        "limit-count": {
+                            "count": 2,
+                            "time_window": 60,
+                            "rejected_code": 503,
+                            "key": "remote_addr",
+                            "policy": "redis",
+                            "redis_host": "127.0.0.1",
+                            "redis_port": 6379,
+                            "redis_timeout": 1001,
+                            "redis_username": "bob",
+                            "redis_password": "somepassword"
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    }
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- response_body
+passed
+
+
+
+=== TEST 16: request for TEST 13
+--- request
+GET /hello
+--- error_code eval
+500
+--- error_log
+failed to limit count: WRONGPASS invalid username-password pair or user is disabled
+
+
+
+=== TEST 17: set route, with redis host, port and good username and bad password
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+
+            local code, body = t('/apisix/admin/routes/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "uri": "/hello",
+                    "plugins": {
+                        "limit-count": {
+                            "count": 2,
+                            "time_window": 60,
+                            "rejected_code": 503,
+                            "key": "remote_addr",
+                            "policy": "redis",
+                            "redis_host": "127.0.0.1",
+                            "redis_port": 6379,
+                            "redis_timeout": 1001,
+                            "redis_username": "alice",
+                            "redis_password": "badpassword"
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    }
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- response_body
+passed
+
+
+
+=== TEST 18: request for TEST 15
+--- request
+GET /hello
+--- error_code eval
+500
+--- error_log
+failed to limit count: WRONGPASS invalid username-password pair or user is disabled
+
+
+
+=== TEST 19: set route, with redis host, port and right username and password
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+
+            local code, body = t('/apisix/admin/routes/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "uri": "/hello",
+                    "plugins": {
+                        "limit-count": {
+                            "count": 2,
+                            "time_window": 60,
+                            "rejected_code": 503,
+                            "key": "remote_addr",
+                            "policy": "redis",
+                            "redis_host": "127.0.0.1",
+                            "redis_port": 6379,
+                            "redis_timeout": 1001,
+                            "redis_username": "alice",
+                            "redis_password": "somepassword"
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    }
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- response_body
+passed
+
+
+
+=== TEST 20: up the limit
+--- pipelined_requests eval
+["GET /hello", "GET /hello", "GET /hello", "GET /hello"]
+--- error_code eval
+[200, 200, 503, 503]
+
+
+
+=== TEST 21: up the limit
+--- pipelined_requests eval
+["GET /hello1", "GET /hello", "GET /hello2", "GET /hello", "GET /hello"]
+--- error_code eval
+[404, 200, 404, 200, 503]
+
+
+
+=== TEST 22: restore redis password to ''
 --- config
     location /t {
         content_by_lua_block {
@@ -430,14 +585,7 @@ failed to limit req: ERR invalid password
                         return nil, err
                     end
                 end
-                local res, err = red:eval([[
-                    local key = 'requirepass'
-                    local value = ''
-                    -- redis.replicate_commands()
-                    local val = redis.pcall('CONFIG', 'SET', key, value)
-                    return val
-                    ]], 0)
-                --
+                local res, err = red:config('set', 'requirepass', '')
                 if not res then
                     ngx.say("failed to set: ", err)
                     return
@@ -448,9 +596,5 @@ failed to limit req: ERR invalid password
             end
         }
     }
---- request
-GET /t
 --- error_code eval
 200
---- no_error_log
-[error]

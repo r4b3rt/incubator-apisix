@@ -30,6 +30,19 @@ repeat_each(1);
 no_long_string();
 no_shuffle();
 no_root_location();
+
+add_block_preprocessor(sub {
+    my ($block) = @_;
+
+    if (!$block->request) {
+        $block->set_value("request", "GET /t");
+    }
+
+    if (!$block->error_log && !$block->no_error_log) {
+        $block->set_value("no_error_log", "[error]\n[alert]");
+    }
+});
+
 run_tests;
 
 __DATA__
@@ -47,21 +60,17 @@ __DATA__
             ngx.say("done")
         }
     }
---- request
-GET /t
 --- response_body
 done
---- no_error_log
-[error]
 
 
 
-=== TEST 2: wrong value of key
+=== TEST 2: set key empty
 --- config
     location /t {
         content_by_lua_block {
             local plugin = require("apisix.plugins.limit-count")
-            local ok, err = plugin.check_schema({count = 2, time_window = 60, rejected_code = 503, key = 'host'})
+            local ok, err = plugin.check_schema({count = 2, time_window = 60, rejected_code = 503})
             if not ok then
                 ngx.say(err)
             end
@@ -69,13 +78,8 @@ done
             ngx.say("done")
         }
     }
---- request
-GET /t
 --- response_body
-property "key" validation failed: matches none of the enum values
 done
---- no_error_log
-[error]
 
 
 
@@ -112,12 +116,8 @@ done
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -126,8 +126,6 @@ passed
 ["GET /hello", "GET /hello", "GET /hello", "GET /hello"]
 --- error_code eval
 [200, 200, 503, 503]
---- no_error_log
-[error]
 
 
 
@@ -136,8 +134,6 @@ passed
 ["GET /hello1", "GET /hello", "GET /hello2", "GET /hello", "GET /hello"]
 --- error_code eval
 [404, 503, 404, 503, 503]
---- no_error_log
-[error]
 
 
 
@@ -174,12 +170,8 @@ passed
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -188,8 +180,6 @@ passed
 ["GET /hello", "GET /hello", "GET /hello", "GET /hello"]
 --- error_code eval
 [200, 200, 200, 503]
---- no_error_log
-[error]
 
 
 
@@ -223,13 +213,9 @@ passed
             ngx.print(body)
         }
     }
---- request
-GET /t
 --- error_code: 400
 --- response_body
-{"error_msg":"failed to check the configuration of plugin limit-count err: property \"count\" is required"}
---- no_error_log
-[error]
+{"error_msg":"failed to check the configuration of plugin limit-count err: value should match only one schema, but matches none"}
 
 
 
@@ -265,13 +251,9 @@ GET /t
             ngx.print(body)
         }
     }
---- request
-GET /t
 --- error_code: 400
 --- response_body
-{"error_msg":"failed to check the configuration of plugin limit-count err: property \"count\" validation failed: expected -100 to be greater than 0"}
---- no_error_log
-[error]
+{"error_msg":"failed to check the configuration of plugin limit-count err: property \"count\" validation failed: value should match only one schema, but matches none"}
 
 
 
@@ -307,17 +289,13 @@ GET /t
             ngx.print(body)
         }
     }
---- request
-GET /t
 --- error_code: 400
 --- response_body
-{"error_msg":"failed to check the configuration of plugin limit-count err: property \"count\" validation failed: expected -100 to be greater than 0"}
---- no_error_log
-[error]
+{"error_msg":"failed to check the configuration of plugin limit-count err: property \"count\" validation failed: value should match only one schema, but matches none"}
 
 
 
-=== TEST 11: invalid service: missing key
+=== TEST 11: invalid service: missing count
 --- config
     location /t {
         content_by_lua_block {
@@ -346,13 +324,9 @@ GET /t
             ngx.print(body)
         }
     }
---- request
-GET /t
 --- error_code: 400
 --- response_body
-{"error_msg":"failed to check the configuration of plugin limit-count err: property \"count\" is required"}
---- no_error_log
-[error]
+{"error_msg":"failed to check the configuration of plugin limit-count err: value should match only one schema, but matches none"}
 
 
 
@@ -387,13 +361,9 @@ GET /t
             ngx.print(body)
         }
     }
---- request
-GET /t
 --- error_code: 400
 --- response_body
-{"error_msg":"failed to check the configuration of plugin limit-count err: property \"count\" validation failed: expected -100 to be greater than 0"}
---- no_error_log
-[error]
+{"error_msg":"failed to check the configuration of plugin limit-count err: property \"count\" validation failed: value should match only one schema, but matches none"}
 
 
 
@@ -428,13 +398,9 @@ GET /t
             ngx.print(body)
         }
     }
---- request
-GET /t
 --- error_code: 400
 --- response_body
-{"error_msg":"failed to check the configuration of plugin limit-count err: property \"count\" validation failed: expected -100 to be greater than 0"}
---- no_error_log
-[error]
+{"error_msg":"failed to check the configuration of plugin limit-count err: property \"count\" validation failed: value should match only one schema, but matches none"}
 
 
 
@@ -449,7 +415,7 @@ GET /t
                         "plugins": {
                             "limit-count": {
                                 "count": 2,
-                                "time_window": 60,
+                                "time_window": 61,
                                 "rejected_code": 503,
                                 "key": "remote_addr"
                             }
@@ -470,12 +436,8 @@ GET /t
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -484,8 +446,6 @@ passed
 ["GET /hello", "GET /hello", "GET /hello", "GET /hello"]
 --- error_code eval
 [200, 200, 503, 503]
---- no_error_log
-[error]
 
 
 
@@ -515,12 +475,8 @@ passed
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -529,8 +485,6 @@ passed
 ["GET /hello", "GET /hello", "GET /hello", "GET /hello"]
 --- error_code eval
 [200, 200, 200, 200]
---- no_error_log
-[error]
 
 
 
@@ -567,12 +521,8 @@ passed
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -581,8 +531,6 @@ passed
 ["GET /hello", "GET /hello", "GET /hello", "GET /hello"]
 --- error_code eval
 [200, 200, 503, 503]
---- no_error_log
-[error]
 
 
 
@@ -598,7 +546,7 @@ passed
                         "plugins": {
                             "limit-count": {
                                 "count": 2,
-                                "time_window": 60,
+                                "time_window": 80,
                                 "key": "remote_addr"
                             }
                         },
@@ -609,17 +557,6 @@ passed
                             "type": "roundrobin"
                         },
                         "uri": "/hello"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                                "limit-count": {
-                                    "rejected_code": 503
-                                }
-                            }
-                        }
-                    }
                 }]]
                 )
 
@@ -629,12 +566,8 @@ passed
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -650,7 +583,7 @@ passed
                         "plugins": {
                             "limit-count": {
                                 "count": 1,
-                                "time_window": 60,
+                                "time_window": 80,
                                 "key": "remote_addr"
                             }
                         },
@@ -661,17 +594,6 @@ passed
                             "type": "roundrobin"
                         },
                         "uri": "/hello"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                                "limit-count": {
-                                    "rejected_code": 503
-                                }
-                            }
-                        }
-                    }
                 }]]
                 )
 
@@ -685,8 +607,6 @@ passed
 ["GET /hello", "GET /hello","GET /hello","GET /t1", "GET /hello","GET /hello"]
 --- error_code eval
 [200, 200, 503, 200, 200, 503]
---- no_error_log
-[error]
 
 
 
@@ -702,7 +622,7 @@ passed
                         "plugins": {
                             "limit-count": {
                                 "count": 2,
-                                "time_window": 60,
+                                "time_window": 82,
                                 "key": "remote_addr"
                             }
                         },
@@ -713,17 +633,6 @@ passed
                             "type": "roundrobin"
                         },
                         "uri": "/hello"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                                "limit-count": {
-                                    "rejected_code": 503
-                                }
-                            }
-                        }
-                    }
                 }]]
                 )
 
@@ -743,7 +652,7 @@ passed
                         "plugins": {
                             "limit-count": {
                                 "count": 1,
-                                "time_window": 60,
+                                "time_window": 82,
                                 "key": "remote_addr"
                             }
                         },
@@ -754,17 +663,6 @@ passed
                             "type": "roundrobin"
                         },
                         "uri": "/hello"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                                "limit-count": {
-                                    "rejected_code": 503
-                                }
-                            }
-                        }
-                    }
                 }]]
                 )
 
@@ -778,8 +676,6 @@ passed
 ["GET /t1", "GET /hello", "GET /hello", "GET /t", "GET /hello", "GET /hello", "GET /hello"]
 --- error_code eval
 [200, 200, 503, 200, 200, 200, 503]
---- no_error_log
-[error]
 
 
 
@@ -795,7 +691,7 @@ passed
                         "plugins": {
                             "limit-count": {
                                 "count": 2,
-                                "time_window": 60,
+                                "time_window": 83,
                                 "key": "remote_addr"
                             }
                         },
@@ -806,17 +702,6 @@ passed
                             "type": "roundrobin"
                         },
                         "uri": "/hello"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                                "limit-count": {
-                                    "rejected_code": 503
-                                }
-                            }
-                        }
-                    }
                 }]]
                 )
 
@@ -829,9 +714,7 @@ passed
 --- pipelined_requests eval
 ["GET /t", "GET /hello", "GET /hello", "GET /hello", "GET /t", "GET /hello", "GET /hello", "GET /hello"]
 --- error_code eval
-[200, 200, 200, 503, 200, 200, 200, 503]
---- no_error_log
-[error]
+[200, 200, 200, 503, 200, 503, 503, 503]
 
 
 
@@ -857,12 +740,8 @@ passed
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -899,12 +778,8 @@ passed
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -915,8 +790,6 @@ apikey: auth-jack
 ["GET /hello", "GET /hello", "GET /hello", "GET /hello"]
 --- error_code eval
 [200, 200, 503, 503]
---- no_error_log
-[error]
 
 
 
@@ -951,12 +824,8 @@ apikey: auth-jack
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -986,12 +855,8 @@ passed
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -1000,8 +865,6 @@ passed
 ["GET /hello", "GET /hello", "GET /hello", "GET /hello"]
 --- error_code eval
 [200, 200, 503, 503]
---- no_error_log
-[error]
 
 
 
@@ -1021,12 +884,8 @@ passed
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -1042,7 +901,7 @@ passed
                         "plugins": {
                             "limit-count": {
                                 "count": 2,
-                                "time_window": 60,
+                                "time_window": 91,
                                 "rejected_code": 503,
                                 "key": "service_id"
                             }
@@ -1064,12 +923,8 @@ passed
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -1078,8 +933,6 @@ passed
 ["GET /hello", "GET /hello", "GET /hello", "GET /hello"]
 --- error_code eval
 [200, 200, 503, 503]
---- no_error_log
-[error]
 
 
 
@@ -1096,12 +949,8 @@ passed
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -1118,12 +967,8 @@ passed
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -1139,7 +984,7 @@ passed
                         "plugins": {
                             "limit-count": {
                                 "count": 2,
-                                "time_window": 60,
+                                "time_window": 95,
                                 "rejected_code": 503
                             }
                         },
@@ -1159,12 +1004,8 @@ passed
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -1173,8 +1014,6 @@ passed
 ["GET /hello", "GET /hello", "GET /hello", "GET /hello"]
 --- error_code eval
 [200, 200, 503, 503]
---- no_error_log
-[error]
 
 
 
@@ -1223,12 +1062,8 @@ passed
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -1240,7 +1075,7 @@ passed
     apisix.http_init()
 
     local utils = require("apisix.core.utils")
-    utils.dns_parse = function (domain, resolvers)  -- mock: DNS parser
+    utils.dns_parse = function (domain)  -- mock: DNS parser
         if domain == "test.com" then
             return {address = "127.0.0.1"}
         end
@@ -1255,8 +1090,6 @@ passed
 ["GET /hello", "GET /hello", "GET /hello", "GET /hello", "GET /hello"]
 --- error_code eval
 [200, 200, 200, 503, 503]
---- no_error_log
-[error]
 
 
 
@@ -1273,7 +1106,7 @@ passed
                     "plugins": {
                         "limit-count": {
                             "count": 3,
-                            "time_window": 60,
+                            "time_window": 99,
                             "rejected_code": 503
                         }
                     },
@@ -1293,12 +1126,8 @@ passed
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -1310,7 +1139,7 @@ passed
     apisix.http_init()
 
     local utils = require("apisix.core.utils")
-    utils.dns_parse = function (domain, resolvers)  -- mock: DNS parser
+    utils.dns_parse = function (domain)  -- mock: DNS parser
         if domain == "test.com" then
             return {address = "127.0.0.1"}
         end
@@ -1325,5 +1154,39 @@ passed
 ["GET /hello", "GET /hello", "GET /hello", "GET /hello", "GET /hello"]
 --- error_code eval
 [200, 200, 200, 503, 503]
---- no_error_log
-[error]
+
+
+
+=== TEST 41: check_schema failed (the `count` attribute is equal to 0)
+--- config
+    location /t {
+        content_by_lua_block {
+            local plugin = require("apisix.plugins.limit-count")
+            local ok, err = plugin.check_schema({count = 0, time_window = 60, rejected_code = 503, key = 'remote_addr'})
+            if not ok then
+                ngx.say(err)
+            end
+
+            ngx.say("done")
+        }
+    }
+--- response_body eval
+qr/property \"count\" validation failed: value should match only one schema, but matches none/
+
+
+
+=== TEST 42: check_schema failed (the `time_window` attribute is equal to 0)
+--- config
+    location /t {
+        content_by_lua_block {
+            local plugin = require("apisix.plugins.limit-count")
+            local ok, err = plugin.check_schema({count = 2, time_window = 0, rejected_code = 503, key = 'remote_addr'})
+            if not ok then
+                ngx.say(err)
+            end
+
+            ngx.say("done")
+        }
+    }
+--- response_body eval
+qr/property \"time_window\" validation failed: value should match only one schema, but matches none/

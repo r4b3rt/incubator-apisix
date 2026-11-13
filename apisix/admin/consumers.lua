@@ -16,26 +16,20 @@
 --
 local core    = require("apisix.core")
 local plugins = require("apisix.admin.plugins")
-local utils   = require("apisix.admin.utils")
-local plugin  = require("apisix.plugin")
-local pairs   = pairs
-
-local _M = {
-    version = 0.1,
-}
+local plugins_encrypt_conf = require("apisix.admin.plugins").encrypt_conf
+local resource = require("apisix.admin.resource")
+local apisix_consumer = require("apisix.consumer")
 
 
-local function check_conf(conf)
-    -- core.log.error(core.json.encode(conf))
-    if not conf then
-        return nil, {error_msg = "missing configurations"}
-    end
-
-    core.log.info("schema: ", core.json.delay_encode(core.schema.consumer))
-    core.log.info("conf  : ", core.json.delay_encode(conf))
-    local ok, err = core.schema.check(core.schema.consumer, conf)
+local function check_conf(username, conf, need_username, schema, opts)
+    opts = opts or {}
+    local ok, err = core.schema.check(schema, conf)
     if not ok then
         return nil, {error_msg = "invalid configuration: " .. err}
+    end
+
+    if username and username ~= conf.username then
+        return nil, {error_msg = "wrong username" }
     end
 
     if conf.plugins then
@@ -44,16 +38,25 @@ local function check_conf(conf)
             return nil, {error_msg = "invalid plugins configuration: " .. err}
         end
 
-        local count_auth_plugin = 0
-        for name, conf in pairs(conf.plugins) do
-            local plugin_obj = plugin.get(name)
-            if plugin_obj.type == 'auth' then
-                count_auth_plugin = count_auth_plugin + 1
-            end
+        ok, err = apisix_consumer.check_duplicate_key(conf.plugins, conf.username)
+        if not ok then
+            return nil, {error_msg = err}
+        end
+    end
+
+    if conf.group_id and not opts.skip_references_check then
+        local key = "/consumer_groups/" .. conf.group_id
+        local res, err = core.etcd.get(key)
+        if not res then
+            return nil, {error_msg = "failed to fetch consumer group info by "
+                                     .. "consumer group id [" .. conf.group_id .. "]: "
+                                     .. err}
         end
 
-        if count_auth_plugin == 0 then
-            return nil, {error_msg = "require one auth plugin"}
+        if res.status ~= 200 then
+            return nil, {error_msg = "failed to fetch consumer group info by "
+                                     .. "consumer group id [" .. conf.group_id .. "], "
+                                     .. "response code: " .. res.status}
         end
     end
 
@@ -61,65 +64,16 @@ local function check_conf(conf)
 end
 
 
-function _M.put(_, conf)
-    local consumer_name, err = check_conf(conf)
-    if not consumer_name then
-        return 400, err
-    end
-
-    local key = "/consumers/" .. consumer_name
-    core.log.info("key: ", key)
-
-    local ok, err = utils.inject_conf_with_prev_conf("consumer", key, conf)
-    if not ok then
-        return 500, {error_msg = err}
-    end
-
-    local res, err = core.etcd.set(key, conf)
-    if not res then
-        core.log.error("failed to put consumer[", key, "]: ", err)
-        return 500, {error_msg = err}
-    end
-
-    return res.status, res.body
+local function encrypt_conf(id, conf)
+    plugins_encrypt_conf(conf.plugins, core.schema.TYPE_CONSUMER)
 end
 
 
-function _M.get(consumer_name)
-    local key = "/consumers"
-    if consumer_name then
-        key = key .. "/" .. consumer_name
-    end
-
-    local res, err = core.etcd.get(key, not consumer_name)
-    if not res then
-        core.log.error("failed to get consumer[", key, "]: ", err)
-        return 500, {error_msg = err}
-    end
-
-    return res.status, res.body
-end
-
-
-function _M.post(consumer_name, conf)
-    return 405, {error_msg = "not supported `POST` method for consumer"}
-end
-
-
-function _M.delete(consumer_name)
-    if not consumer_name then
-        return 400, {error_msg = "missing consumer name"}
-    end
-
-    local key = "/consumers/" .. consumer_name
-    local res, err = core.etcd.delete(key)
-    if not res then
-        core.log.error("failed to delete consumer[", key, "]: ", err)
-        return 500, {error_msg = err}
-    end
-
-    return res.status, res.body
-end
-
-
-return _M
+return resource.new({
+    name = "consumers",
+    kind = "consumer",
+    schema = core.schema.consumer,
+    checker = check_conf,
+    encrypt_conf = encrypt_conf,
+    unsupported_methods = {"post", "patch"}
+})

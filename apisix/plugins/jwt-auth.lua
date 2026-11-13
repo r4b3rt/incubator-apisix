@@ -15,47 +15,103 @@
 -- limitations under the License.
 --
 local core     = require("apisix.core")
-local jwt      = require("resty.jwt")
-local ck       = require("resty.cookie")
 local consumer_mod = require("apisix.consumer")
-local resty_random = require("resty.random")
+local new_tab = require ("table.new")
+local auth_utils = require("apisix.utils.auth")
 
-local ngx_encode_base64 = ngx.encode_base64
+local secret   = require("apisix.secret")
 local ngx_decode_base64 = ngx.decode_base64
-local ipairs   = ipairs
 local ngx      = ngx
-local ngx_time = ngx.time
 local sub_str  = string.sub
+local table_insert = table.insert
+local table_concat = table.concat
+local ngx_re_gmatch = ngx.re.gmatch
 local plugin_name = "jwt-auth"
-local pcall = pcall
 
-
-local lrucache = core.lrucache.new({
-    type = "plugin",
-})
+local schema_def = require("apisix.schema_def")
+local jwt_parser = require("apisix.plugins.jwt-auth.parser")
 
 local schema = {
     type = "object",
-    additionalProperties = false,
-    properties = {},
+    properties = {
+        header = {
+            type = "string",
+            default = "authorization"
+        },
+        query = {
+            type = "string",
+            default = "jwt"
+        },
+        cookie = {
+            type = "string",
+            default = "jwt"
+        },
+        hide_credentials = {
+            type = "boolean",
+            default = false
+        },
+        key_claim_name = {
+            type = "string",
+            default = "key",
+            minLength = 1,
+        },
+        store_in_ctx = {
+            type = "boolean",
+            default = false
+        },
+        realm = schema_def.get_realm_schema("jwt"),
+        anonymous_consumer = schema_def.anonymous_consumer_schema,
+        claims_to_verify = {
+            type = "array",
+            items = {
+                type = "string",
+                enum = {"exp","nbf"},
+            },
+            uniqueItems = true,
+        },
+    },
 }
 
 local consumer_schema = {
     type = "object",
     -- can't use additionalProperties with dependencies
-    -- additionalProperties = false,
     properties = {
-        key = {type = "string"},
-        secret = {type = "string"},
+        key = {
+            type = "string",
+            minLength = 1,
+        },
+        secret = {
+            type = "string",
+            minLength = 1,
+        },
         algorithm = {
             type = "string",
-            enum = {"HS256", "HS512", "RS256"},
+            enum = {
+                "HS256",
+                "HS384",
+                "HS512",
+                "RS256",
+                "RS384",
+                "RS512",
+                "ES256",
+                "ES384",
+                "ES512",
+                "PS256",
+                "PS384",
+                "PS512",
+                "EdDSA",
+            },
             default = "HS256"
         },
         exp = {type = "integer", minimum = 1, default = 86400},
         base64_secret = {
             type = "boolean",
             default = false
+        },
+        lifetime_grace_period = {
+            type = "integer",
+            minimum = 0,
+            default = 0
         }
     },
     dependencies = {
@@ -64,24 +120,38 @@ local consumer_schema = {
                 {
                     properties = {
                         algorithm = {
-                            enum = {"HS256", "HS512"},
+                            enum = {"HS256", "HS384", "HS512"},
                             default = "HS256"
                         },
                     },
                 },
                 {
                     properties = {
-                        public_key = {type = "string"},
-                        private_key= {type = "string"},
+                        public_key = {
+                            type = "string",
+                            minLength = 1,
+                        },
                         algorithm = {
-                            enum = {"RS256"},
+                            enum = {
+                                "RS256",
+                                "RS384",
+                                "RS512",
+                                "ES256",
+                                "ES384",
+                                "ES512",
+                                "PS256",
+                                "PS384",
+                                "PS512",
+                                "EdDSA",
+                            },
                         },
                     },
-                    required = {"public_key", "private_key"},
-                }
+                    required = {"public_key"},
+                },
             }
         }
     },
+    encrypt_fields = {"secret"},
     required = {"key"},
 }
 
@@ -96,64 +166,71 @@ local _M = {
 }
 
 
-local create_consume_cache
-do
-    local consumer_names = {}
-
-    function create_consume_cache(consumers)
-        core.table.clear(consumer_names)
-
-        for _, consumer in ipairs(consumers.nodes) do
-            core.log.info("consumer node: ", core.json.delay_encode(consumer))
-            consumer_names[consumer.auth_conf.key] = consumer
-        end
-
-        return consumer_names
-    end
-
-end -- do
-
-
 function _M.check_schema(conf, schema_type)
-    core.log.info("input conf: ", core.json.delay_encode(conf))
-
     local ok, err
     if schema_type == core.schema.TYPE_CONSUMER then
         ok, err = core.schema.check(consumer_schema, conf)
     else
-        ok, err = core.schema.check(schema, conf)
+        return core.schema.check(schema, conf)
     end
 
     if not ok then
         return false, err
     end
 
-    if schema_type == core.schema.TYPE_CONSUMER then
-        if conf.algorithm ~= "RS256" and not conf.secret then
-            conf.secret = ngx_encode_base64(resty_random.bytes(32, true))
-        elseif conf.base64_secret then
-            if ngx_decode_base64(conf.secret) == nil then
-                return false, "base64_secret required but the secret is not in base64 format"
-            end
-        end
+    local is_hs_alg = conf.algorithm:sub(1, 2) == "HS"
+    if is_hs_alg and not conf.secret then
+        return false, "property \"secret\" is required when using HS based algorithms"
+    end
 
-        if conf.algorithm == "RS256" then
-            if not conf.public_key then
-                return false, "missing valid public key"
-            end
-            if not conf.private_key then
-                return false, "missing valid private key"
-            end
+    if conf.base64_secret and not secret.is_secret_ref(conf.secret) then
+        if ngx_decode_base64(conf.secret) == nil then
+            return false, "base64_secret required but the secret is not in base64 format"
         end
+    end
+
+    if not is_hs_alg and not conf.public_key then
+        return false, "missing valid public key"
     end
 
     return true
 end
 
+local function remove_specified_cookie(src, key)
+    local cookie_key_pattern = "([a-zA-Z0-9-_]*)"
+    local cookie_val_pattern = "([a-zA-Z0-9-._]*)"
+    local t = new_tab(1, 0)
 
-local function fetch_jwt_token(ctx)
-    local token = core.request.header(ctx, "authorization")
+    local it, err = ngx_re_gmatch(src, cookie_key_pattern .. "=" .. cookie_val_pattern, "jo")
+    if not it then
+        core.log.error("match origins failed: ", err)
+        return src
+    end
+    while true do
+        local m, err = it()
+        if err then
+            core.log.error("iterate origins failed: ", err)
+            return src
+        end
+        if not m then
+            break
+        end
+        if m[1] ~= key then
+            table_insert(t, m[0])
+        end
+    end
+
+    return table_concat(t, "; ")
+end
+
+local function fetch_jwt_token(conf, ctx)
+    local token = core.request.header(ctx, conf.header)
     if token then
+        if conf.hide_credentials then
+            -- hide for header
+            core.request.set_header(ctx, conf.header, nil)
+        end
+
         local prefix = sub_str(token, 1, 7)
         if prefix == 'Bearer ' or prefix == 'bearer ' then
             return sub_str(token, 8)
@@ -162,178 +239,157 @@ local function fetch_jwt_token(ctx)
         return token
     end
 
-    token = ctx.var.arg_jwt
+    local uri_args = core.request.get_uri_args(ctx) or {}
+    token = uri_args[conf.query]
     if token then
+        if conf.hide_credentials then
+            -- hide for query
+            uri_args[conf.query] = nil
+            core.request.set_uri_args(ctx, uri_args)
+        end
         return token
     end
 
-    local cookie, err = ck:new()
-    if not cookie then
-        return nil, err
+    local val = ctx.var["cookie_" .. conf.cookie]
+    if not val then
+        return nil, "JWT not found in cookie"
     end
 
-    local val, err = cookie:get("jwt")
-    return val, err
-end
+    if conf.hide_credentials then
+        -- hide for cookie
+        local src = core.request.header(ctx, "Cookie")
+        local reset_val = remove_specified_cookie(src, conf.cookie)
+        core.request.set_header(ctx, "Cookie", reset_val)
+    end
 
+    return val
+end
 
 local function get_secret(conf)
+    local secret = conf.secret
+
     if conf.base64_secret then
-        return ngx_decode_base64(conf.secret)
+        return ngx_decode_base64(secret)
     end
 
-    return conf.secret
+    return secret
 end
 
 
-local function sign_jwt_with_HS(key, auth_conf)
-    local auth_secret = get_secret(auth_conf)
-    local ok, jwt_token = pcall(jwt.sign, _M,
-            auth_secret,
-            {
-                header = {
-                    typ = "JWT",
-                    alg = auth_conf.algorithm
-                },
-                payload = {
-                    key = key,
-                    exp = ngx_time() + auth_conf.exp
-                }
-            }
-    )
+local function get_auth_secret(consumer)
+    if not consumer.auth_conf.algorithm or consumer.auth_conf.algorithm:sub(1, 2) == "HS" then
+        return get_secret(consumer.auth_conf)
+    else
+        return consumer.auth_conf.public_key
+    end
+end
+
+
+local function find_consumer(conf, ctx)
+    -- fetch token and hide credentials if necessary
+    local jwt_token, err = fetch_jwt_token(conf, ctx)
+    if not jwt_token then
+        core.log.info("failed to fetch JWT token: ", err)
+        return nil, nil, "Missing JWT token in request"
+    end
+
+    local jwt, err = jwt_parser.new(jwt_token)
+    if not jwt then
+        err = "JWT token invalid: " .. err
+        if auth_utils.is_running_under_multi_auth(ctx) then
+            return nil, nil, err
+        end
+        core.log.warn(err)
+        return nil, nil, "JWT token invalid"
+    end
+    core.log.debug("parsed jwt alg: ", jwt.header and jwt.header.alg,
+                   ", key claim name: ", conf.key_claim_name)
+
+    local key_claim_name = conf.key_claim_name
+    local user_key = jwt.payload and jwt.payload[key_claim_name]
+    if not user_key then
+        return nil, nil, "missing user key in JWT token"
+    end
+
+    local consumer, consumer_conf, err = consumer_mod.find_consumer(plugin_name, "key", user_key)
+    if not consumer then
+        core.log.warn("failed to find consumer: ", err or "invalid user key")
+        return nil, nil, "Invalid user key in JWT token"
+    end
+
+    local auth_secret, err = get_auth_secret(consumer)
+    if not auth_secret then
+        err = "failed to retrieve secrets, err: " .. err
+        if auth_utils.is_running_under_multi_auth(ctx) then
+            return nil, nil, err
+        end
+        core.log.error(err)
+        return nil, nil, "failed to verify jwt"
+    end
+
+    -- Enforce that the JWT header's "alg" matches the consumer's configured algorithm
+    local expected_alg = consumer.auth_conf.algorithm or "HS256"
+    local token_alg = jwt.header and jwt.header.alg
+    if token_alg ~= expected_alg then
+        local err = "failed to verify jwt: algorithm mismatch, expected " .. expected_alg
+        if auth_utils.is_running_under_multi_auth(ctx) then
+            return nil, nil, err
+        end
+        core.log.warn(err)
+        return nil, nil, "failed to verify jwt"
+    end
+
+    -- Now verify the JWT signature
+    if not jwt:verify_signature(auth_secret) then
+        local err = "failed to verify jwt: signature mismatch: " .. jwt.signature
+        if auth_utils.is_running_under_multi_auth(ctx) then
+            return nil, nil, err
+        end
+        core.log.warn(err)
+        return nil, nil, "failed to verify jwt"
+    end
+
+    -- Verify the JWT registered claims
+    local ok, err = jwt:verify_claims(conf.claims_to_verify, {
+        lifetime_grace_period = consumer.auth_conf.lifetime_grace_period
+    })
     if not ok then
-        core.log.warn("failed to sign jwt, err: ", jwt_token.reason)
-        core.response.exit(500, "failed to sign jwt")
+        err = "failed to verify jwt: " .. err
+        if auth_utils.is_running_under_multi_auth(ctx) then
+            return nil, nil, err
+        end
+        core.log.error(err)
+        return nil, nil, "failed to verify jwt"
     end
-    return jwt_token
-end
 
-
-local function sign_jwt_with_RS256(key, auth_conf)
-    local ok, jwt_token = pcall(jwt.sign, _M,
-            auth_conf.private_key,
-            {
-                header = {
-                    typ = "JWT",
-                    alg = auth_conf.algorithm,
-                    x5c = {
-                        auth_conf.public_key,
-                    }
-                },
-                payload = {
-                    key = key,
-                    exp = ngx_time() + auth_conf.exp
-                }
-            }
-    )
-    if not ok then
-        core.log.warn("failed to sign jwt, err: ", jwt_token.reason)
-        core.response.exit(500, "failed to sign jwt")
+    if conf.store_in_ctx then
+        ctx.jwt_auth_payload = jwt.payload
     end
-    return jwt_token
-end
 
-
-local function algorithm_handler(consumer)
-    if not consumer.auth_conf.algorithm or consumer.auth_conf.algorithm == "HS256"
-            or consumer.auth_conf.algorithm == "HS512" then
-        return sign_jwt_with_HS, get_secret(consumer.auth_conf)
-    elseif consumer.auth_conf.algorithm == "RS256" then
-        return sign_jwt_with_RS256, consumer.auth_conf.public_key
-    end
+    return consumer, consumer_conf
 end
 
 
 function _M.rewrite(conf, ctx)
-    local jwt_token, err = fetch_jwt_token(ctx)
-    if not jwt_token then
-        if err and err:sub(1, #"no cookie") ~= "no cookie" then
-            core.log.error("failed to fetch JWT token: ", err)
-        end
-
-        return 401, {message = "Missing JWT token in request"}
-    end
-
-    local jwt_obj = jwt:load_jwt(jwt_token)
-    core.log.info("jwt object: ", core.json.delay_encode(jwt_obj))
-    if not jwt_obj.valid then
-        return 401, {message = jwt_obj.reason}
-    end
-
-    local user_key = jwt_obj.payload and jwt_obj.payload.key
-    if not user_key then
-        return 401, {message = "missing user key in JWT token"}
-    end
-
-    local consumer_conf = consumer_mod.plugin(plugin_name)
-    if not consumer_conf then
-        return 401, {message = "Missing related consumer"}
-    end
-
-    local consumers = lrucache("consumers_key", consumer_conf.conf_version,
-        create_consume_cache, consumer_conf)
-
-    local consumer = consumers[user_key]
+    local consumer, consumer_conf, err = find_consumer(conf, ctx)
     if not consumer then
-        return 401, {message = "Invalid user key in JWT token"}
+        if not conf.anonymous_consumer then
+            core.response.set_header("WWW-Authenticate", "Bearer realm=\"" .. conf.realm .. "\"")
+            return 401, { message = err }
+        end
+        consumer, consumer_conf, err = consumer_mod.get_anonymous_consumer(conf.anonymous_consumer)
+        if not consumer then
+            err = "jwt-auth failed to authenticate the request, code: 401. error: " .. err
+            core.log.error(err)
+            core.response.set_header("WWW-Authenticate", "Bearer realm=\"" .. conf.realm .. "\"")
+            return 401, { message = "Invalid user authorization"}
+        end
     end
-    core.log.info("consumer: ", core.json.delay_encode(consumer))
 
-    local _, auth_secret = algorithm_handler(consumer)
-    jwt_obj = jwt:verify_jwt_obj(auth_secret, jwt_obj)
-    core.log.info("jwt object: ", core.json.delay_encode(jwt_obj))
-
-    if not jwt_obj.verified then
-        return 401, {message = jwt_obj.reason}
-    end
+    core.log.info("consumer: ", consumer.username)
 
     consumer_mod.attach_consumer(ctx, consumer, consumer_conf)
     core.log.info("hit jwt-auth rewrite")
-end
-
-
-local function gen_token()
-    local args = ngx.req.get_uri_args()
-    if not args or not args.key then
-        return core.response.exit(400)
-    end
-
-    local key = args.key
-
-    local consumer_conf = consumer_mod.plugin(plugin_name)
-    if not consumer_conf then
-        return core.response.exit(404)
-    end
-
-    local consumers = lrucache("consumers_key", consumer_conf.conf_version,
-        create_consume_cache, consumer_conf)
-
-    core.log.info("consumers: ", core.json.delay_encode(consumers))
-    local consumer = consumers[key]
-    if not consumer then
-        return core.response.exit(404)
-    end
-
-    core.log.info("consumer: ", core.json.delay_encode(consumer))
-
-    local sign_handler, _ = algorithm_handler(consumer)
-    local jwt_token = sign_handler(key, consumer.auth_conf)
-    if jwt_token then
-        return core.response.exit(200, jwt_token)
-    end
-
-    return core.response.exit(404)
-end
-
-
-function _M.api()
-    return {
-        {
-            methods = {"GET"},
-            uri = "/apisix/plugin/jwt/sign",
-            handler = gen_token,
-        }
-    }
 end
 
 

@@ -43,7 +43,7 @@ __DATA__
                         "upstream": {
                             "nodes": {
                                 "127.0.0.1:1980": 1,
-                                "github.com:80": 0
+                                "www.apiseven.com:80": 0
                             },
                             "type": "roundrobin"
                         },
@@ -62,9 +62,7 @@ GET /t
 --- response_body
 passed
 --- error_log eval
-qr/.*parse_args\(\): dns resolver\[.+\]/
---- no_error_log
-[error]
+qr/.*init_resolver\(\): dns resolver \[.+\]/
 
 
 
@@ -75,9 +73,7 @@ GET /not_found
 --- response_body
 {"error_msg":"404 Route Not Found"}
 --- error_log eval
-qr/.*parse_args\(\): dns resolver\[.+\]/
---- no_error_log
-[error]
+qr/.*init_resolver\(\): dns resolver \[.+\]/
 
 
 
@@ -86,7 +82,5 @@ qr/.*parse_args\(\): dns resolver\[.+\]/
 GET /hello
 --- response_body
 hello world
---- no_error_log
-[error]
 --- error_log eval
-qr/dns resolver domain: github.com to \d+.\d+.\d+.\d+/
+qr/dns resolver domain: www.apiseven.com to \d+.\d+.\d+.\d+/

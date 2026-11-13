@@ -21,11 +21,51 @@ no_long_string();
 no_root_location();
 log_level("debug");
 
+add_block_preprocessor(sub {
+    my ($block) = @_;
+
+    my $extra_yaml_config = <<_EOC_;
+plugins:
+    - public-api
+    - batch-requests
+_EOC_
+
+    $block->set_value("extra_yaml_config", $extra_yaml_config);
+});
+
 run_tests;
 
 __DATA__
 
-=== TEST 1: sanity
+=== TEST 1: pre-create public API route
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "plugins": {
+                            "public-api": {}
+                        },
+                        "uri": "/apisix/batch-requests"
+                 }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 2: sanity
 --- config
     location = /aggregate {
         content_by_lua_block {
@@ -67,6 +107,7 @@ __DATA__
                     "status": 200,
                     "body":"B",
                     "headers": {
+                        "Client-IP": "127.0.0.1",
                         "Base-Header": "base",
                         "Base-Query": "base_query",
                         "X-Res": "B",
@@ -80,6 +121,7 @@ __DATA__
                     "status": 201,
                     "body":"C",
                     "headers": {
+                        "Client-IP-From-Hdr": "127.0.0.1",
                         "Base-Header": "base",
                         "Base-Query": "base_query",
                         "X-Res": "C",
@@ -100,7 +142,7 @@ __DATA__
                 ]]=],
                 {
                     ConflictHeader = "outer_header",
-                    OuterConflict = "outer_confliect"
+                    OuterConflict = "outer_conflict"
                 })
 
             ngx.status = code
@@ -111,6 +153,7 @@ __DATA__
     location = /b {
         content_by_lua_block {
             ngx.status = 200
+            ngx.header["Client-IP"] = ngx.var.remote_addr
             ngx.header["Base-Header"] = ngx.req.get_headers()["Base-Header"]
             ngx.header["Base-Query"] = ngx.var.arg_base
             ngx.header["X-Header1"] = ngx.req.get_headers()["Header1"]
@@ -124,6 +167,7 @@ __DATA__
     location = /c {
         content_by_lua_block {
             ngx.status = 201
+            ngx.header["Client-IP-From-Hdr"] = ngx.req.get_headers()["X-Real-IP"]
             ngx.header["Base-Header"] = ngx.req.get_headers()["Base-Header"]
             ngx.header["Base-Query"] = ngx.var.arg_base
             ngx.header["X-Res"] = "C"
@@ -146,12 +190,10 @@ __DATA__
 GET /aggregate
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 2: missing pipeling
+=== TEST 3: missing pipeline
 --- config
     location = /aggregate {
         content_by_lua_block {
@@ -184,13 +226,11 @@ passed
 GET /aggregate
 --- error_code: 400
 --- response_body
-{"error_msg":"bad request body: object matches none of the requireds: [\"pipeline\"]"}
---- no_error_log
-[error]
+{"error_msg":"bad request body: object matches none of the required: [\"pipeline\"]"}
 
 
 
-=== TEST 3: timeout is not number
+=== TEST 4: timeout is not number
 --- config
     location = /aggregate {
         content_by_lua_block {
@@ -225,12 +265,10 @@ GET /aggregate
 --- error_code: 400
 --- response_body
 {"error_msg":"bad request body: property \"timeout\" validation failed: wrong type: expected integer, got string"}
---- no_error_log
-[error]
 
 
 
-=== TEST 4: different response time
+=== TEST 5: different response time
 --- config
     location = /aggregate {
         content_by_lua_block {
@@ -294,12 +332,10 @@ GET /aggregate
 GET /aggregate
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 5: last request timeout
+=== TEST 6: last request timeout
 --- config
     location = /aggregate {
         content_by_lua_block {
@@ -367,7 +403,7 @@ timeout
 
 
 
-=== TEST 6: first request timeout
+=== TEST 7: first request timeout
 --- config
     location = /aggregate {
         content_by_lua_block {
@@ -429,7 +465,7 @@ timeout
 
 
 
-=== TEST 7: no body in request
+=== TEST 8: no body in request
 --- config
     location = /aggregate {
         content_by_lua_block {
@@ -450,12 +486,10 @@ GET /aggregate
 --- error_code: 400
 --- response_body
 {"error_msg":"no request body, you should give at least one pipeline setting"}
---- no_error_log
-[error]
 
 
 
-=== TEST 8: invalid body
+=== TEST 9: invalid body
 --- config
     location = /aggregate {
         content_by_lua_block {
@@ -463,7 +497,7 @@ GET /aggregate
             local t = require("lib.test_admin").test
             local code, body = t('/apisix/batch-requests',
                 ngx.HTTP_POST,
-                "invaild json string"
+                "invalid json string"
                 )
 
             ngx.status = code
@@ -474,13 +508,11 @@ GET /aggregate
 GET /aggregate
 --- error_code: 400
 --- response_body
-{"error_msg":"invalid request body: invaild json string, err: Expected value but found invalid token at character 1"}
---- no_error_log
-[error]
+{"error_msg":"invalid request body: invalid json string, err: Expected value but found invalid token at character 1"}
 
 
 
-=== TEST 9: invalid pipeline's path
+=== TEST 10: invalid pipeline's path
 --- config
     location = /aggregate {
         content_by_lua_block {
@@ -505,12 +537,10 @@ GET /aggregate
 --- error_code: 400
 --- response_body
 {"error_msg":"bad request body: property \"pipeline\" validation failed: failed to validate item 1: property \"path\" validation failed: string too short, expected at least 1, got 0"}
---- no_error_log
-[error]
 
 
 
-=== TEST 10: invalid pipeline's method
+=== TEST 11: invalid pipeline's method
 --- config
     location = /aggregate {
         content_by_lua_block {
@@ -535,12 +565,10 @@ GET /aggregate
 --- error_code: 400
 --- response_body
 {"error_msg":"bad request body: property \"pipeline\" validation failed: failed to validate item 1: property \"method\" validation failed: matches none of the enum values"}
---- no_error_log
-[error]
 
 
 
-=== TEST 11: invalid pipeline's version
+=== TEST 12: invalid pipeline's version
 --- config
     location = /aggregate {
         content_by_lua_block {
@@ -565,12 +593,10 @@ GET /aggregate
 --- error_code: 400
 --- response_body
 {"error_msg":"bad request body: property \"pipeline\" validation failed: failed to validate item 1: property \"version\" validation failed: matches none of the enum values"}
---- no_error_log
-[error]
 
 
 
-=== TEST 12: invalid pipeline's ssl
+=== TEST 13: invalid pipeline's ssl
 --- config
     location = /aggregate {
         content_by_lua_block {
@@ -595,12 +621,10 @@ GET /aggregate
 --- error_code: 400
 --- response_body
 {"error_msg":"bad request body: property \"pipeline\" validation failed: failed to validate item 1: property \"ssl_verify\" validation failed: wrong type: expected boolean, got number"}
---- no_error_log
-[error]
 
 
 
-=== TEST 13: invalid pipeline's number
+=== TEST 14: invalid pipeline's number
 --- config
     location = /aggregate {
         content_by_lua_block {
@@ -621,12 +645,10 @@ GET /aggregate
 --- error_code: 400
 --- response_body
 {"error_msg":"bad request body: property \"pipeline\" validation failed: expect array to have at least 1 items"}
---- no_error_log
-[error]
 
 
 
-=== TEST 14: when client body has been wrote to temp file
+=== TEST 15: when client body has been wrote to temp file
 --- config
     client_body_in_file_only on;
     location = /aggregate {
@@ -688,12 +710,10 @@ GET /aggregate
 GET /aggregate
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 15: copy all header to every request except Contenct-
+=== TEST 16: copy all header to every request except content
 --- config
     client_body_in_file_only on;
     location = /aggregate {
@@ -776,12 +796,10 @@ passed
 GET /aggregate
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 16: exceed default body limit size (check header)
+=== TEST 17: exceed default body limit size (check header)
 --- config
     location = /t {
         content_by_lua_block {
@@ -802,12 +820,10 @@ GET /t
 --- error_code: 413
 --- response_body eval
 qr/\{"error_msg":"request size 4194304 is greater than the maximum size 1048576 allowed"\}/
---- no_error_log
-[error]
 
 
 
-=== TEST 17: exceed default body limit size (check file size)
+=== TEST 18: exceed default body limit size (check file size)
 --- request eval
 "POST /apisix/batch-requests
 " . ("1000\r
@@ -820,14 +836,12 @@ Transfer-Encoding: chunked
 --- error_code: 413
 --- response_body eval
 qr/\{"error_msg":"request size 1052672 is greater than the maximum size 1048576 allowed"\}/
---- no_error_log
-[error]
 --- error_log
 attempt to read body from file
 
 
 
-=== TEST 18: add plugin metadata
+=== TEST 19: add plugin metadata
 --- config
     location /t {
         content_by_lua_block {
@@ -849,12 +863,10 @@ attempt to read body from file
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 19: exceed body limit size
+=== TEST 20: exceed body limit size
 --- config
     location = /t {
         content_by_lua_block {
@@ -875,12 +887,10 @@ GET /t
 --- error_code: 413
 --- response_body eval
 qr/\{"error_msg":"request size 4096 is greater than the maximum size 2048 allowed"\}/
---- no_error_log
-[error]
 
 
 
-=== TEST 20: exceed body limit size (expected)
+=== TEST 21: exceed body limit size (expected)
 --- config
     location = /t {
         content_by_lua_block {
@@ -903,12 +913,10 @@ GET /t
 --- error_code: 413
 --- response_body eval
 qr/\{"error_msg":"request size 4096 is greater than the maximum size 2048 allowed"\}/
---- no_error_log
-[error]
 
 
 
-=== TEST 21: don't exceed body limit size
+=== TEST 22: don't exceed body limit size
 --- config
     location = /t {
         content_by_lua_block {
@@ -961,12 +969,10 @@ qr/\{"error_msg":"request size 4096 is greater than the maximum size 2048 allowe
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
-=== TEST 22: invalid body size
+=== TEST 23: invalid body size
 --- config
     location /t {
         content_by_lua_block {
@@ -988,13 +994,186 @@ passed
 GET /t
 --- error_code: 400
 --- response_body eval
-qr/\{"error_msg":"invalid configuration: property \\"max_body_size\\" validation failed: expected 0 to be sctrictly greater than 0"\}/
---- no_error_log
-[error]
+qr/\{"error_msg":"invalid configuration: property \\"max_body_size\\" validation failed: expected 0 to be greater than 0"\}/
 
 
 
-=== TEST 23: keep environment clean
+=== TEST 24: reject unknown field in a pipeline request
+--- config
+    location = /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/batch-requests',
+                 ngx.HTTP_POST,
+                 [=[{
+                    "pipeline":[
+                    {
+                        "path": "/b",
+                        "unknown_field": "x"
+                    }
+                    ]
+                }]=]
+            )
+
+            ngx.status = code
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- error_code: 400
+--- response_body eval
+qr/bad request body/
+
+
+
+=== TEST 25: accept and forward a request body in a pipeline request
+--- config
+    location = /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, message, res_body = t('/apisix/batch-requests',
+                 ngx.HTTP_POST,
+                 [=[{
+                    "pipeline":[
+                    {
+                        "method": "POST",
+                        "path": "/echo",
+                        "body": "hello"
+                    }
+                    ]
+                }]=]
+            )
+
+            ngx.status = code
+            ngx.say(res_body)
+        }
+    }
+    location = /echo {
+        content_by_lua_block {
+            ngx.req.read_body()
+            ngx.status = 200
+            ngx.print(ngx.req.get_body_data() or "")
+        }
+    }
+--- request
+GET /t
+--- response_body eval
+qr/"body":"hello"/
+
+
+
+=== TEST 26: reject timeout below the minimum
+--- config
+    location = /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/batch-requests',
+                 ngx.HTTP_POST,
+                 [=[{
+                    "timeout": 0,
+                    "pipeline":[
+                    {
+                        "path": "/b"
+                    }
+                    ]
+                }]=]
+            )
+
+            ngx.status = code
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- error_code: 400
+--- response_body eval
+qr/bad request body/
+
+
+
+=== TEST 27: set a small max_pipeline_items
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/plugin_metadata/batch-requests',
+                ngx.HTTP_PUT,
+                [[{
+                    "max_pipeline_items": 2
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 28: reject a pipeline with too many requests
+--- config
+    location = /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/batch-requests',
+                 ngx.HTTP_POST,
+                 [=[{
+                    "pipeline":[
+                    {"path": "/b"},
+                    {"path": "/b"},
+                    {"path": "/b"}
+                    ]
+                }]=]
+            )
+
+            ngx.status = code
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- error_code: 400
+--- response_body eval
+qr/too many pipeline requests, 3 exceeds the maximum of 2/
+
+
+
+=== TEST 29: reject a pipeline entry missing path
+--- config
+    location = /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/batch-requests',
+                 ngx.HTTP_POST,
+                 [=[{
+                    "pipeline":[
+                    {
+                        "method": "GET"
+                    }
+                    ]
+                }]=]
+            )
+
+            ngx.status = code
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- error_code: 400
+--- response_body eval
+qr/property \\"path\\" is required/
+
+
+
+=== TEST 30: keep environment clean
 --- config
     location /t {
         content_by_lua_block {
@@ -1015,5 +1194,269 @@ qr/\{"error_msg":"invalid configuration: property \\"max_body_size\\" validation
 GET /t
 --- response_body
 passed
+
+
+
+=== TEST 31: configure response body limits
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/plugin_metadata/batch-requests',
+                ngx.HTTP_PUT,
+                [[{
+                    "max_response_body_size": 5,
+                    "max_response_body_size_total": 8
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 32: reject a subresponse body over its limit
+--- config
+    location = /six-bytes {
+        content_by_lua_block {
+            ngx.header.content_length = 6
+            ngx.print("123456")
+        }
+    }
+--- request
+POST /apisix/batch-requests
+{"pipeline":[{"path":"/six-bytes"}]}
+--- error_code: 502
+--- response_body
+{"error_msg":"response body of pipeline request 1 exceeds max_response_body_size"}
+
+
+
+=== TEST 33: reject aggregate response bodies over their limit
+--- config
+    location = /five-bytes {
+        content_by_lua_block {
+            ngx.print("12")
+            ngx.flush(true)
+            ngx.print("345")
+        }
+    }
+    location = /four-bytes {
+        content_by_lua_block {
+            ngx.print("12")
+            ngx.flush(true)
+            ngx.print("34")
+        }
+    }
+--- request
+POST /apisix/batch-requests
+{"headers":{"Connection":"keep-alive"},"pipeline":[{"path":"/five-bytes"},{"path":"/four-bytes"}]}
+--- error_code: 502
+--- response_body
+{"error_msg":"response body of pipeline request 2 exceeds max_response_body_size_total"}
+
+
+
+=== TEST 34: allow response bodies at the per-item and aggregate limits
+--- config
+    location = /five-bytes {
+        content_by_lua_block {
+            ngx.print("12")
+            ngx.flush(true)
+            ngx.print("345")
+        }
+    }
+    location = /three-bytes {
+        content_by_lua_block {
+            ngx.print("1")
+            ngx.flush(true)
+            ngx.print("23")
+        }
+    }
+--- request
+POST /apisix/batch-requests
+{"headers":{"Connection":"keep-alive"},"pipeline":[{"path":"/five-bytes"},{"path":"/three-bytes"}]}
+--- error_code: 200
+--- response_body eval
+qr/^\[.*"body":"12345".*"body":"123".*\]$/
+
+
+
+=== TEST 35: accept a close-delimited response at the per-item limit
+--- config
+    location = /close-delimited-five-bytes {
+        chunked_transfer_encoding off;
+        content_by_lua_block {
+            ngx.print("12345")
+        }
+    }
+--- request
+POST /apisix/batch-requests
+{"pipeline":[{"path":"/close-delimited-five-bytes","headers":{"Connection":"close"}}]}
+--- error_code: 200
+--- response_body eval
+qr/^\[.*"body":"12345".*\]$/
 --- no_error_log
-[error]
+read pipeline response body failed
+
+
+
+=== TEST 36: reject a close-delimited response over the per-item limit
+--- config
+    location = /close-delimited-six-bytes {
+        chunked_transfer_encoding off;
+        content_by_lua_block {
+            ngx.print("123456")
+        }
+    }
+--- request
+POST /apisix/batch-requests
+{"pipeline":[{"path":"/close-delimited-six-bytes","headers":{"Connection":"close"}}]}
+--- error_code: 502
+--- response_body
+{"error_msg":"response body of pipeline request 1 exceeds max_response_body_size"}
+
+
+
+=== TEST 37: count a close-delimited response toward the aggregate limit
+--- config
+    location = /four-bytes-with-length {
+        content_by_lua_block {
+            ngx.header.content_length = 4
+            ngx.print("1234")
+        }
+    }
+    location = /close-delimited-five-bytes {
+        chunked_transfer_encoding off;
+        content_by_lua_block {
+            ngx.print("12345")
+        }
+    }
+--- request
+POST /apisix/batch-requests
+{"headers":{"Connection":"keep-alive"},"pipeline":[{"path":"/four-bytes-with-length"},{"path":"/close-delimited-five-bytes","headers":{"Connection":"close"}}]}
+--- error_code: 502
+--- response_body
+{"error_msg":"response body of pipeline request 2 exceeds max_response_body_size_total"}
+
+
+
+=== TEST 38: report a timeout while reading a close-delimited response
+--- config
+    location = /close-delimited-timeout {
+        chunked_transfer_encoding off;
+        content_by_lua_block {
+            ngx.print("partial")
+            ngx.flush(true)
+            ngx.sleep(0.3)
+            ngx.print("body")
+        }
+    }
+--- request
+POST /apisix/batch-requests
+{"timeout":100,"pipeline":[{"path":"/close-delimited-timeout","headers":{"Connection":"close"}}]}
+--- error_code: 200
+--- response_body_like eval
+qr/"read_body_err":"timeout"/
+--- response_body_unlike eval
+qr/"body":/
+--- error_log
+read pipeline response body failed: timeout
+
+
+
+=== TEST 39: reject an invalid response body limit
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/plugin_metadata/batch-requests',
+                ngx.HTTP_PUT,
+                [[{
+                    "max_response_body_size_total": 0
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- error_code: 400
+--- response_body eval
+qr/property \\"max_response_body_size_total\\" validation failed/
+
+
+
+=== TEST 40: reset plugin metadata
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/plugin_metadata/batch-requests',
+                ngx.HTTP_PUT,
+                [[{
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 41: reject a response body over the default per-item limit
+--- config
+    location = /over-one-mib {
+        content_by_lua_block {
+            ngx.header.content_length = 1048577
+            ngx.print(("x"):rep(1048577))
+        }
+    }
+--- request
+POST /apisix/batch-requests
+{"pipeline":[{"path":"/over-one-mib"}]}
+--- error_code: 502
+--- response_body
+{"error_msg":"response body of pipeline request 1 exceeds max_response_body_size"}
+
+
+
+=== TEST 42: accept the default boundaries and reject the next aggregate byte
+--- config
+    location = /one-mib {
+        content_by_lua_block {
+            ngx.header.content_length = 1048576
+            ngx.print(("x"):rep(1048576))
+        }
+    }
+    location = /one-byte {
+        content_by_lua_block {
+            ngx.header.content_length = 1
+            ngx.print("x")
+        }
+    }
+--- request
+POST /apisix/batch-requests
+{"headers":{"Connection":"keep-alive"},"pipeline":[{"path":"/one-mib"},{"path":"/one-mib"},{"path":"/one-mib"},{"path":"/one-mib"},{"path":"/one-mib"},{"path":"/one-mib"},{"path":"/one-mib"},{"path":"/one-mib"},{"path":"/one-mib"},{"path":"/one-mib"},{"path":"/one-byte"}]}
+--- error_code: 502
+--- response_body
+{"error_msg":"response body of pipeline request 11 exceeds max_response_body_size_total"}

@@ -54,8 +54,6 @@ __DATA__
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -82,8 +80,6 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -93,8 +89,6 @@ GET /not_found
 --- error_code: 404
 --- response_body
 {"error_msg":"404 Route Not Found"}
---- no_error_log
-[error]
 
 
 
@@ -150,8 +144,6 @@ connect() failed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -196,8 +188,6 @@ qr/\[error\]/
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -239,8 +229,6 @@ qr/\[error\]/
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -262,8 +250,55 @@ connect() failed
 --- request
 GET /hello
 --- error_code: 502
---- error_log_like eval
-qr/proxy request to 127.0.0.1:1
+--- error_log
+Connection refused
+failed to find valid upstream server
+proxy request to 127.0.0.1:1
 proxy request to 127.0.0.2:1
-|proxy request to 127.0.0.2:1
-proxy request to 127.0.0.1:1/
+
+
+
+=== TEST 13: stop proxy to next upstream by retry_timeout
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1980": 100,
+                                "127.0.0.1:1981": 100,
+                                "127.0.0.1:1982": 100
+                            },
+                            "retries": 10,
+                            "retry_timeout": 0.15,
+                            "type": "roundrobin"
+                        },
+                        "uri": "/mysleep"
+                }]]
+                )
+
+            if code ~= 200 then
+                ngx.say(body)
+                return
+            end
+            local http = require "resty.http"
+            local httpc = http.new()
+            local uri = "http://127.0.0.1:" .. ngx.var.server_port
+                        .. "/mysleep?abort=true&seconds=0.1"
+            local res, err = httpc:request_uri(uri)
+            if not res then
+                ngx.say(err)
+                return
+            end
+            ngx.status = res.status
+            ngx.say(res.status)
+        }
+    }
+--- request
+GET /t
+--- error_code: 502
+--- error_log
+proxy retry timeout, retry count: 1

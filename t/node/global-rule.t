@@ -65,8 +65,6 @@ __DATA__
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -84,8 +82,6 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -95,8 +91,6 @@ GET /not_found
 --- error_code: 404
 --- response_body
 {"error_msg":"404 Route Not Found"}
---- no_error_log
-[error]
 
 
 
@@ -106,8 +100,6 @@ GET /hello
 --- error_code: 404
 --- response_body
 {"error_msg":"404 Route Not Found"}
---- no_error_log
-[error]
 
 
 
@@ -115,12 +107,78 @@ GET /hello
 --- request
 GET /hello
 --- error_code: 503
---- no_error_log
-[error]
 
 
 
-=== TEST 6: delete global rule
+=== TEST 6: global rule for internal api (should limit)
+--- yaml_config
+plugins:
+  - limit-count
+  - node-status
+--- request
+GET /apisix/status
+--- error_code: 503
+
+
+
+=== TEST 7: update global rule
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/global_rules/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "plugins": {
+                        "response-rewrite": {
+                            "headers": {
+                                "X-VERSION":"1.0"
+                            }
+                        },
+                        "uri-blocker": {
+                            "block_rules": ["select.+(from|limit)", "(?:(union(.*?)select))"]
+                        }
+                    }
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 8: hit global rules
+--- request
+GET /hello?name=;union%20select%20
+--- error_code: 403
+--- response_headers
+X-VERSION: 1.0
+
+
+
+=== TEST 9: hit global rules by internal api (only check uri-blocker)
+--- yaml_config
+plugins:
+  - response-rewrite
+  - uri-blocker
+  - node-status
+--- request
+GET /apisix/status?name=;union%20select%20
+--- error_code: 403
+--- response_headers
+X-VERSION: 1.0
+
+
+
+=== TEST 10: delete global rules
 --- config
     location /t {
         content_by_lua_block {
@@ -144,5 +202,179 @@ GET /t
 passed
 404
 404
---- no_error_log
-[error]
+
+
+
+=== TEST 11: empty global rule
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/global_rules/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "plugins": {
+                    }
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+                ngx.say(body)
+                return
+            end
+
+            local code, body = t('/apisix/admin/routes/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "plugins": {
+                        "response-rewrite": {
+                            "body": "changed\n"
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uri": "/hello"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+                return
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 12: hit global rules
+--- request
+GET /hello
+--- response_body
+changed
+
+
+
+=== TEST 13: global rule works with the consumer, after deleting the global rule, ensure no stale plugins remaining
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/consumers',
+                ngx.HTTP_PUT,
+                [[{
+                    "username": "test",
+                    "plugins": {
+                        "basic-auth": {
+                            "username": "test",
+                            "password": "test"
+                        }
+                    },
+                    "desc": "test description"
+                }]]
+            )
+
+            if code >= 300 then
+                ngx.status = code
+                return
+            end
+
+            local code, body = t('/apisix/admin/routes/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "uri": "/hello",
+                    "upstream": {
+                        "type": "roundrobin",
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        }
+                    }
+                }]]
+            )
+
+            if code >= 300 then
+                ngx.status = code
+                return
+            end
+
+            local code, body = t('/apisix/admin/global_rules/1',
+                ngx.HTTP_PUT,
+                [[{
+                    "plugins": {
+                        "basic-auth": {}
+                    }
+                }]]
+            )
+
+            if code >= 300 then
+                ngx.status = code
+                return
+            end
+
+            -- sleep for data sync
+            ngx.sleep(0.5)
+
+            -- hit the route without authorization, should be 401
+            local code, body = t('/hello',
+                ngx.HTTP_PUT
+            )
+
+            if code ~= 401 then
+                ngx.status = 400
+                return
+            end
+
+            -- hit the route with authorization
+            local code, body = t('/hello',
+                ngx.HTTP_PUT,
+                nil,
+                nil,
+                {Authorization = "Basic dGVzdDp0ZXN0"}
+            )
+
+            if code ~= 200 then
+                ngx.status = code
+                return
+            end
+
+            local code, body = t('/apisix/admin/global_rules/1',
+                ngx.HTTP_DELETE,
+                [[{
+                    "plugins": {
+                        "basic-auth": {}
+                    }
+                }]]
+            )
+
+            if code >= 300 then
+                ngx.status = code
+                return
+            end
+
+            ngx.sleep(0.5)
+            -- hit the route with authorization, should be 200
+            local code, body = t('/hello',
+                ngx.HTTP_PUT
+            )
+
+            if code ~= 200 then
+                ngx.status = code
+                return
+            end
+
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed

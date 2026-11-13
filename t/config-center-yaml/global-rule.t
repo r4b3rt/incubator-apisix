@@ -27,8 +27,10 @@ add_block_preprocessor(sub {
     my $yaml_config = $block->yaml_config // <<_EOC_;
 apisix:
     node_listen: 1984
-    config_center: yaml
-    enable_admin: false
+deployment:
+    role: data_plane
+    role_data_plane:
+        config_provider: yaml
 _EOC_
 
     $block->set_value("yaml_config", $yaml_config);
@@ -112,3 +114,23 @@ global_rules:
                     - /h*
 #END
 --- error_code: 403
+
+
+
+=== TEST 4: common phase without matched route
+--- apisix_yaml
+routes:
+    -
+        uri: /apisix/prometheus/metrics
+        plugins:
+            public-api: {}
+global_rules:
+    -
+        id: 1
+        plugins:
+            cors:
+                allow_origins: "http://a.com,http://b.com"
+#END
+--- request
+GET /apisix/prometheus/metrics
+--- error_code: 200

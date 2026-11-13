@@ -37,8 +37,6 @@ __DATA__
     }
 --- request
 GET /delete
---- no_error_log
-[error]
 --- ignore_response
 
 
@@ -106,8 +104,6 @@ Host: foo.com
 --- response_body eval
 ["passed\n", "hello world\n", "passed\n", "hello world\n", "passed\n", "{\"error_msg\":\"404 Route Not Found\"}\n",
 "passed\n", "hello world\n", "passed\n", "hello world\n", "passed\n", "{\"error_msg\":\"404 Route Not Found\"}\n"]
---- no_error_log
-[error]
 --- timeout: 5
 
 
@@ -180,7 +176,7 @@ Host: foo.com
                         "type": "roundrobin"
                     },
                     "host": "foo.com",
-                    "uri": "/hello_"
+                    "uri": "/hello_chunked"
                 }]],
                 nil
                 )
@@ -221,7 +217,7 @@ Host: foo.com
     }
 --- pipelined_requests eval
 ["GET /add", "GET /hello", "GET /update", "GET /hello", "GET /status", "GET /delete", "GET /status",
-"GET /add2", "GET /hello_", "GET /update2", "GET /hello_", "GET /hello1", "GET /delete", "GET /hello1"]
+"GET /add2", "GET /hello_chunked", "GET /update2", "GET /hello_chunked", "GET /hello1", "GET /delete", "GET /hello1"]
 --- more_headers
 Host: foo.com
 --- error_code eval
@@ -229,8 +225,6 @@ Host: foo.com
 --- response_body eval
 ["passed\n", "hello world\n", "passed\n", "{\"error_msg\":\"404 Route Not Found\"}\n", "ok\n", "passed\n", "{\"error_msg\":\"404 Route Not Found\"}\n",
 "passed\n", "hello world\n", "passed\n", "{\"error_msg\":\"404 Route Not Found\"}\n", "hello1 world\n", "passed\n", "{\"error_msg\":\"404 Route Not Found\"}\n"]
---- no_error_log
-[error]
 --- timeout: 5
 
 
@@ -330,8 +324,6 @@ Host: foo.com
 [201, 200, 201, 200, 200, 200, 200, 404]
 --- response_body eval
 ["passed\n", "/print_uri_20\n", "passed\n", "/print_uri_36\n", "passed\n", "/print_uri_12\n", "passed\n", "{\"error_msg\":\"404 Route Not Found\"}\n"]
---- no_error_log
-[error]
 --- timeout: 20
 
 
@@ -349,8 +341,6 @@ Host: foo.com
 --- request
 GET /t
 --- error_code: 404
---- no_error_log
-[error]
 
 
 
@@ -361,13 +351,79 @@ GET /t
             local etcd = require("apisix.core.etcd")
             assert(etcd.set("/ab", "ab"))
             local res, err = etcd.get("/a", true)
+            assert(err == nil)
+            assert(#res.body.list == 1)
             ngx.status = res.status
-            ngx.say(res.body.node.value)
+            ngx.say(res.body.list[1].value)
         }
     }
 --- request
 GET /t
 --- response_body
 ab
---- no_error_log
-[error]
+
+
+
+=== TEST 7: run etcd in init phase
+--- init_by_lua_block
+    local apisix = require("apisix")
+    apisix.http_init()
+    local etcd = require("apisix.core.etcd")
+    assert(etcd.set("/a", "ab"))
+
+    local res, err = etcd.get("/a")
+    if not res then
+        ngx.log(ngx.ERR, err)
+        return
+    end
+    ngx.log(ngx.WARN, res.body.node.value)
+
+    local res, err = etcd.delete("/a")
+    if not res then
+        ngx.log(ngx.ERR, err)
+        return
+    end
+    ngx.log(ngx.WARN, res.status)
+
+    local res, err = etcd.get("/a")
+    if not res then
+        ngx.log(ngx.ERR, err)
+        return
+    end
+    ngx.log(ngx.WARN, res.status)
+--- config
+    location /t {
+        return 200;
+    }
+--- request
+GET /t
+--- grep_error_log eval
+qr/init_by_lua.*: \S+/
+--- grep_error_log_out eval
+qr{init_by_lua.* ab
+init_by_lua.* 200
+init_by_lua.* 404}
+
+
+
+=== TEST 8: list multiple kv, get prefix
+--- config
+    location /t {
+        content_by_lua_block {
+            local etcd = require("apisix.core.etcd")
+            assert(etcd.set("/ab", "ab"))
+            assert(etcd.set("/abc", "abc"))
+            -- get prefix
+            local res, err = etcd.get("/a", true)
+            assert(err == nil)
+            assert(#res.body.list == 2)
+            ngx.status = res.status
+            ngx.say(res.body.list[1].value)
+            ngx.say(res.body.list[2].value)
+        }
+    }
+--- request
+GET /t
+--- response_body
+ab
+abc

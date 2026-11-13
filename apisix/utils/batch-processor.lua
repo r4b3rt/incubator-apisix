@@ -21,6 +21,7 @@ local ipairs = ipairs
 local table = table
 local now = ngx.now
 local type = type
+local exiting = ngx.worker.exiting
 local batch_processor = {}
 local batch_processor_mt = {
     __index = batch_processor
@@ -28,7 +29,10 @@ local batch_processor_mt = {
 local execute_func
 local create_buffer_timer
 local batch_metrics
-local prometheus = require("apisix.plugins.prometheus.exporter")
+local prometheus
+if ngx.config.subsystem == "http" then
+    prometheus = require("apisix.plugins.prometheus.exporter")
+end
 
 
 local schema = {
@@ -42,49 +46,84 @@ local schema = {
         batch_max_size = {type = "integer", minimum = 1, default= 1000},
     }
 }
+batch_processor.schema = schema
 
 
 local function schedule_func_exec(self, delay, batch)
     local hdl, err = timer_at(delay, execute_func, self, batch)
     if not hdl then
-        core.log.error("failed to create process timer: ", err)
-        return
+        if err == "process exiting" then
+            local hdl2, err2 = timer_at(0, execute_func, self, batch)
+            if not hdl2 then
+                core.log.error("failed to create fallback process timer ",
+                               "while exiting: ", err2)
+                return
+            end
+        else
+            core.log.error("failed to create process timer: ", err)
+            return
+        end
     end
 end
 
 
-function execute_func(premature, self, batch)
-    if premature then
-        return
+local function set_metrics(self, count)
+    -- add batch metric for every route
+    if batch_metrics and self.name and self.route_id and self.server_addr then
+        self.label = {self.name, self.route_id, self.server_addr}
+        batch_metrics:set(count, self.label)
     end
+end
 
-    local ok, err = self.func(batch.entries, self.batch_max_size)
+
+local function slice_batch(batch, n)
+    local slice = {}
+    local idx = 1
+    for i = n or 1, #batch do
+        slice[idx] = batch[i]
+        idx = idx + 1
+    end
+    return slice
+end
+
+
+function execute_func(premature, self, batch)
+    -- In case of "err" and a valid "first_fail" batch processor considers, all first_fail-1
+    -- entries have been successfully consumed and hence reschedule the job for entries with
+    -- index first_fail to #entries based on the current retry policy.
+    local ok, err, first_fail = self.func(batch.entries, self.batch_max_size)
     if not ok then
-        core.log.error("Batch Processor[", self.name,
-                       "] failed to process entries: ", err)
+        if first_fail then
+            core.log.error("Batch Processor[", self.name, "] failed to process entries [",
+                            #batch.entries + 1 - first_fail, "/", #batch.entries ,"]: ", err)
+            batch.entries = slice_batch(batch.entries, first_fail)
+            self.processed_entries = self.processed_entries + first_fail - 1
+        else
+            core.log.error("Batch Processor[", self.name,
+                           "] failed to process entries: ", err)
+        end
+
         batch.retry_count = batch.retry_count + 1
-        if batch.retry_count <= self.max_retry_count then
+        if batch.retry_count <= self.max_retry_count and #batch.entries > 0 then
             schedule_func_exec(self, self.retry_delay,
                                batch)
         else
+            self.processed_entries = self.processed_entries + #batch.entries
             core.log.error("Batch Processor[", self.name,"] exceeded ",
                            "the max_retry_count[", batch.retry_count,
                            "] dropping the entries")
         end
         return
     end
-
+    self.processed_entries = self.processed_entries + #batch.entries
     core.log.debug("Batch Processor[", self.name,
                    "] successfully processed the entries")
 end
 
 
 local function flush_buffer(premature, self)
-    if premature then
-        return
-    end
-
-    if now() - self.last_entry_t >= self.inactive_timeout or
+    if premature or exiting() or
+       now() - self.last_entry_t >= self.inactive_timeout or
        now() - self.first_entry_t >= self.buffer_duration
     then
         core.log.debug("Batch Processor[", self.name ,"] buffer ",
@@ -104,8 +143,12 @@ end
 function create_buffer_timer(self)
     local hdl, err = timer_at(self.inactive_timeout, flush_buffer, self)
     if not hdl then
-        core.log.error("failed to create buffer timer: ", err)
-        return
+        if err == "process exiting" then
+            timer_at(0, flush_buffer, self)
+        else
+            core.log.error("failed to create buffer timer: ", err)
+            return
+        end
     end
     self.is_timer_running = true
 end
@@ -117,9 +160,12 @@ function batch_processor:new(func, config)
         return nil, err
     end
 
-    if not(type(func) == "function") then
+    if type(func) ~= "function" then
         return nil, "Invalid argument, arg #1 must be a function"
     end
+
+    core.log.debug("creating new batch processor with config: ",
+        core.json.delay_encode(config, true))
 
     local processor = {
         func = func,
@@ -130,27 +176,27 @@ function batch_processor:new(func, config)
         retry_delay = config.retry_delay,
         name = config.name,
         batch_to_process = {},
-        entry_buffer = { entries = {}, retry_count = 0},
+        entry_buffer = {entries = {}, retry_count = 0},
         is_timer_running = false,
         first_entry_t = 0,
         last_entry_t = 0,
         route_id = config.route_id,
         server_addr = config.server_addr,
+        processed_entries = 0
     }
 
     return setmetatable(processor, batch_processor_mt)
 end
 
-
 function batch_processor:push(entry)
     -- if the batch size is one then immediately send for processing
     if self.batch_max_size == 1 then
-        local batch = { entries = { entry }, retry_count = 0 }
+        local batch = {entries = {entry}, retry_count = 0}
         schedule_func_exec(self, 0, batch)
         return
     end
 
-    if not batch_metrics and prometheus.get_prometheus() and self.name
+    if prometheus and prometheus.get_prometheus() and not batch_metrics and self.name
        and self.route_id and self.server_addr then
         batch_metrics = prometheus.get_prometheus():gauge("batch_process_entries",
                                                           "batch process remaining entries",
@@ -159,11 +205,7 @@ function batch_processor:push(entry)
 
     local entries = self.entry_buffer.entries
     table.insert(entries, entry)
-    -- add batch metric for every route
-    if batch_metrics  then
-        self.label = {self.name, self.route_id, self.server_addr}
-        batch_metrics:set(#entries, self.label)
-    end
+    set_metrics(self, #entries)
 
     if #entries == 1 then
         self.first_entry_t = now()
@@ -188,11 +230,8 @@ function batch_processor:process_buffer()
         core.log.debug("transferring buffer entries to processing pipe line, ",
             "buffercount[", #self.entry_buffer.entries ,"]")
         self.batch_to_process[#self.batch_to_process + 1] = self.entry_buffer
-        self.entry_buffer = { entries = {}, retry_count = 0 }
-        if batch_metrics then
-            self.label = {self.name, self.route_id, self.server_addr}
-            batch_metrics:set(0, self.label)
-        end
+        self.entry_buffer = {entries = {}, retry_count = 0}
+        set_metrics(self, 0)
     end
 
     for _, batch in ipairs(self.batch_to_process) do

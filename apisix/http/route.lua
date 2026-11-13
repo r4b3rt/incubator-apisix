@@ -17,9 +17,11 @@
 local require = require
 local radixtree = require("resty.radixtree")
 local router = require("apisix.utils.router")
+local service_fetch = require("apisix.http.service").get
 local core = require("apisix.core")
 local expr = require("resty.expr.v1")
 local plugin_checker = require("apisix.plugin").plugin_checker
+local event = require("apisix.core.event")
 local ipairs = ipairs
 local type = type
 local error = error
@@ -56,13 +58,25 @@ function _M.create_radixtree_uri_router(routes, uri_routes, with_parameter)
                 filter_fun = filter_fun()
             end
 
+            local hosts = route.value.hosts or route.value.host
+            if not hosts and route.value.service_id then
+                local service = service_fetch(route.value.service_id)
+                if not service then
+                    core.log.error("failed to fetch service configuration by ",
+                                   "id: ", route.value.service_id)
+                    -- we keep the behavior that missing service won't affect the route matching
+                else
+                    hosts = service.value.hosts
+                end
+            end
+
             core.log.info("insert uri route: ",
-                          core.json.delay_encode(route.value))
+                          core.json.delay_encode(route.value, true))
             core.table.insert(uri_routes, {
                 paths = route.value.uris or route.value.uri,
                 methods = route.value.methods,
                 priority = route.value.priority,
-                hosts = route.value.hosts or route.value.host,
+                hosts = hosts,
                 remote_addrs = route.value.remote_addrs
                                or route.value.remote_addr,
                 vars = route.value.vars,
@@ -78,6 +92,7 @@ function _M.create_radixtree_uri_router(routes, uri_routes, with_parameter)
         end
     end
 
+    event.push(event.CONST.BUILD_ROUTER, routes)
     core.log.info("route items: ", core.json.delay_encode(uri_routes, true))
 
     if with_parameter then
@@ -88,8 +103,8 @@ function _M.create_radixtree_uri_router(routes, uri_routes, with_parameter)
 end
 
 
-function _M.match_uri(uri_router, match_opts, api_ctx)
-    core.table.clear(match_opts)
+function _M.match_uri(uri_router, api_ctx)
+    local match_opts = core.tablepool.fetch("route_match_opts", 0, 4)
     match_opts.method = api_ctx.var.request_method
     match_opts.host = api_ctx.var.host
     match_opts.remote_addr = api_ctx.var.remote_addr
@@ -97,6 +112,7 @@ function _M.match_uri(uri_router, match_opts, api_ctx)
     match_opts.matched = core.tablepool.fetch("matched_route_record", 0, 4)
 
     local ok = uri_router:dispatch(api_ctx.var.uri, match_opts, api_ctx, match_opts)
+    core.tablepool.release("route_match_opts", match_opts)
     return ok
 end
 

@@ -52,6 +52,8 @@ add_block_preprocessor(sub {
         for _, key in ipairs(keys) do
             ngx.say("host: ", key, " count: ", res[key])
         end
+
+        ctx.server_picker = nil
     end
 _EOC_
     $block->set_value("init_by_lua_block", $init_by_lua_block);
@@ -68,9 +70,9 @@ __DATA__
             local up_conf = {
                 type = "roundrobin",
                 nodes = {
-                    {host = "39.97.63.215", port = 80, weight = 1},
-                    {host = "39.97.63.216", port = 81, weight = 1},
-                    {host = "39.97.63.217", port = 82, weight = 1},
+                    {host = "39.97.63.215", port = 80, weight = 1, priority = 0},
+                    {host = "39.97.63.216", port = 81, weight = 1, priority = 0},
+                    {host = "39.97.63.217", port = 82, weight = 1, priority = 0},
                 }
             }
             local ctx = {conf_version = 1}
@@ -87,8 +89,6 @@ GET /t
 host: 39.97.63.215 count: 4
 host: 39.97.63.216 count: 4
 host: 39.97.63.217 count: 4
---- no_error_log
-[error]
 
 
 
@@ -99,9 +99,9 @@ host: 39.97.63.217 count: 4
             local up_conf = {
                 type = "roundrobin",
                 nodes = {
-                    {host = "39.97.63.215", port = 80, weight = 1},
-                    {host = "39.97.63.216", port = 81, weight = 2},
-                    {host = "39.97.63.217", port = 82, weight = 3},
+                    {host = "39.97.63.215", port = 80, weight = 1, priority = 0},
+                    {host = "39.97.63.216", port = 81, weight = 2, priority = 0},
+                    {host = "39.97.63.217", port = 82, weight = 3, priority = 0},
                 }
             }
             local ctx = {conf_version = 1}
@@ -118,8 +118,6 @@ GET /t
 host: 39.97.63.215 count: 2
 host: 39.97.63.216 count: 4
 host: 39.97.63.217 count: 6
---- no_error_log
-[error]
 
 
 
@@ -130,9 +128,9 @@ host: 39.97.63.217 count: 6
             local up_conf = {
                 type = "roundrobin",
                 nodes = {
-                    {host = "39.97.63.215", port = 80, weight = 1},
-                    {host = "39.97.63.216", port = 81, weight = 1},
-                    {host = "39.97.63.217", port = 82, weight = 1},
+                    {host = "39.97.63.215", port = 80, weight = 1, priority = 0},
+                    {host = "39.97.63.216", port = 81, weight = 1, priority = 0},
+                    {host = "39.97.63.217", port = 82, weight = 1, priority = 0},
                 }
             }
             local ctx = {}
@@ -144,8 +142,8 @@ host: 39.97.63.217 count: 6
 
             -- cached by version
             up_conf.nodes = {
-                {host = "39.97.63.218", port = 80, weight = 1},
-                {host = "39.97.63.219", port = 80, weight = 0},
+                {host = "39.97.63.218", port = 80, weight = 1, priority = 0},
+                {host = "39.97.63.219", port = 80, weight = 0, priority = 0},
             }
             test(route, ctx)
 
@@ -164,8 +162,6 @@ host: 39.97.63.215 count: 4
 host: 39.97.63.216 count: 4
 host: 39.97.63.217 count: 4
 host: 39.97.63.218 count: 12
---- no_error_log
-[error]
 
 
 
@@ -177,9 +173,9 @@ host: 39.97.63.218 count: 12
                 type = "chash",
                 key  = "remote_addr",
                 nodes = {
-                    {host = "39.97.63.215", port = 80, weight = 1},
-                    {host = "39.97.63.216", port = 81, weight = 1},
-                    {host = "39.97.63.217", port = 82, weight = 1},
+                    {host = "39.97.63.215", port = 80, weight = 1, priority = 0},
+                    {host = "39.97.63.216", port = 81, weight = 1, priority = 0},
+                    {host = "39.97.63.217", port = 82, weight = 1, priority = 0},
                 }
             }
             local ctx = {
@@ -193,8 +189,8 @@ host: 39.97.63.218 count: 12
 
             -- cached by version
             up_conf.nodes = {
-                {host = "39.97.63.218", port = 80, weight = 1},
-                {host = "39.97.63.219", port = 80, weight = 0},
+                {host = "39.97.63.218", port = 80, weight = 1, priority = 0},
+                {host = "39.97.63.219", port = 80, weight = 0, priority = 0},
             }
             test(route, ctx)
 
@@ -209,8 +205,6 @@ GET /t
 host: 39.97.63.215 count: 12
 host: 39.97.63.215 count: 12
 host: 39.97.63.218 count: 12
---- no_error_log
-[error]
 
 
 
@@ -221,9 +215,9 @@ host: 39.97.63.218 count: 12
             local up_conf = {
                 type = "roundrobin",
                 nodes = {
-                    {host = "39.97.63.215", port = 80, weight = 1},
-                    {host = "39.97.63.216", port = 81, weight = 1},
-                    {host = "39.97.63.217", port = 82, weight = 1},
+                    {host = "39.97.63.215", port = 80, weight = 1, priority = 0},
+                    {host = "39.97.63.216", port = 81, weight = 1, priority = 0},
+                    {host = "39.97.63.217", port = 82, weight = 1, priority = 0},
                 }
             }
             local ctx = {}
@@ -235,7 +229,7 @@ host: 39.97.63.218 count: 12
 
             -- one item in nodes, return it directly
             up_conf.nodes = {
-                {host = "39.97.63.218", port = 80, weight = 1},
+                {host = "39.97.63.218", port = 80, weight = 1, priority = 0},
             }
             test(route, ctx)
         }
@@ -247,5 +241,3 @@ host: 39.97.63.215 count: 4
 host: 39.97.63.216 count: 4
 host: 39.97.63.217 count: 4
 host: 39.97.63.218 count: 12
---- no_error_log
-[error]

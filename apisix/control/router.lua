@@ -16,17 +16,55 @@
 --
 local require = require
 local router = require("apisix.utils.router")
+local radixtree = require("resty.radixtree")
 local builtin_v1_routes = require("apisix.control.v1")
 local plugin_mod = require("apisix.plugin")
 local core = require("apisix.core")
+
 local str_sub = string.sub
 local ipairs = ipairs
+local pairs = pairs
 local type = type
 local ngx = ngx
 local get_method = ngx.req.get_method
-
+local events = require("apisix.events")
 
 local _M = {}
+
+
+local function format_dismod_uri(mod_name, uri)
+    if core.string.has_prefix(uri, "/v1/") then
+        return uri
+    end
+
+    local tmp = {"/v1/discovery/", mod_name}
+    if not core.string.has_prefix(uri, "/") then
+        core.table.insert(tmp, "/")
+    end
+    core.table.insert(tmp, uri)
+
+    return core.table.concat(tmp, "")
+end
+
+-- we do not hardcode the discovery module's control api uri
+local function format_dismod_control_api_uris(mod_name, api_route)
+    if not api_route or #api_route == 0 then
+        return api_route
+    end
+
+    local clone_route = core.table.clone(api_route)
+    for _, v in ipairs(clone_route) do
+        local uris = v.uris
+        local target_uris = core.table.new(#uris, 0)
+        for _, uri in ipairs(uris) do
+            local target_uri = format_dismod_uri(mod_name, uri)
+            core.table.insert(target_uris, target_uri)
+        end
+        v.uris = target_uris
+    end
+
+    return clone_route
+end
 
 
 local fetch_control_api_router
@@ -66,6 +104,40 @@ function fetch_control_api_router()
         end
     end
 
+    local discovery_type = require("apisix.core.config_local").local_conf().discovery
+    if discovery_type then
+        local discovery = require("apisix.discovery.init").discovery
+        local dump_apis = {}
+        for key, _ in pairs(discovery_type) do
+            local dis_mod = discovery[key]
+            -- if discovery module has control_api method, support it
+            local api_fun = dis_mod.control_api
+            if api_fun then
+                local api_route = api_fun()
+                local format_route = format_dismod_control_api_uris(key, api_route)
+                register_api_routes(routes, format_route)
+            end
+
+            local dump_data = dis_mod.dump_data
+            if dump_data then
+                local target_uri = format_dismod_uri(key, "/dump")
+                local item = {
+                    methods = {"GET"},
+                    uris = {target_uri},
+                    handler = function()
+                        return 200, dump_data()
+                    end
+                }
+                core.table.insert(dump_apis, item)
+            end
+        end
+
+        if #dump_apis > 0 then
+            core.log.notice("dump_apis: ", core.json.encode(dump_apis, true))
+            register_api_routes(routes, dump_apis)
+        end
+    end
+
     core.table.clear(v1_routes)
     register_api_routes(v1_routes, builtin_v1_routes)
 
@@ -83,14 +155,25 @@ function fetch_control_api_router()
         handler = empty_func,
     })
 
-    return router.new(routes)
+    local with_parameter = false
+    local conf = core.config.local_conf()
+    if conf.apisix.enable_control and conf.apisix.control then
+        if conf.apisix.control.router == "radixtree_uri_with_parameter" then
+            with_parameter = true
+        end
+    end
+
+    if with_parameter then
+        return radixtree.new(routes)
+    else
+        return router.new(routes)
+    end
 end
 
 end -- do
 
 
 do
-    local match_opts = {}
     local cached_version
     local router
 
@@ -106,13 +189,25 @@ function _M.match(uri)
         cached_version = plugin_mod.load_times
     end
 
-    core.table.clear(match_opts)
+    local match_opts = core.tablepool.fetch("control_router_match_opts", 0, 4)
     match_opts.method = get_method()
 
-    return router:dispatch(uri, match_opts)
+    local ok, err = router:dispatch(uri, match_opts)
+    core.tablepool.release("control_router_match_opts", match_opts)
+    return ok, err
 end
 
 end -- do
 
+local function reload_plugins()
+    core.log.info("start to hot reload plugins")
+    plugin_mod.load()
+end
+
+
+function _M.init_worker()
+    -- register reload plugin handler
+    events:register(reload_plugins, builtin_v1_routes.reload_event, "PUT")
+end
 
 return _M

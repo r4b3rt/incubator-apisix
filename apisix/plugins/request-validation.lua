@@ -15,28 +15,29 @@
 -- limitations under the License.
 --
 local core          = require("apisix.core")
+local secret        = require("apisix.secret")
 local plugin_name   = "request-validation"
 local ngx           = ngx
-local io           = io
-local req_read_body = ngx.req.read_body
+local type          = type
 
 local schema = {
     type = "object",
-    anyOf = {
-        {
-            title = "Body schema",
-            properties = {
-                body_schema = {type = "object"}
-            },
-            required = {"body_schema"}
+    properties = {
+        header_schema = {type = "object"},
+        body_schema = {type = "object"},
+        max_req_body_size = {
+            type = "integer",
+            minimum = 1,
+            default = 67108864,
+            description = "maximum request body size in bytes buffered into "
+                       .. "memory; larger request bodies are rejected",
         },
-        {
-            title = "Header schema",
-            properties = {
-                header_schema = {type = "object"}
-            },
-            required = {"header_schema"}
-        }
+        rejected_code = {type = "integer", minimum = 200, maximum = 599, default = 400},
+        rejected_msg = {type = "string", minLength = 1, maxLength = 256}
+    },
+    anyOf = {
+        {required = {"header_schema"}},
+        {required = {"body_schema"}}
     }
 }
 
@@ -56,14 +57,14 @@ function _M.check_schema(conf)
         return false, err
     end
 
-    if conf.body_schema then
+    if conf.body_schema and not secret.is_secret_ref(conf.body_schema) then
         ok, err = core.schema.valid(conf.body_schema)
         if not ok then
             return false, err
         end
     end
 
-    if conf.header_schema then
+    if conf.header_schema and not secret.is_secret_ref(conf.header_schema) then
         ok, err = core.schema.valid(conf.header_schema)
         if not ok then
             return false, err
@@ -74,49 +75,66 @@ function _M.check_schema(conf)
 end
 
 
-function _M.rewrite(conf)
-    local headers = ngx.req.get_headers()
+function _M.rewrite(conf, ctx)
+    local headers = core.request.headers(ctx)
 
     if conf.header_schema then
         local ok, err = core.schema.check(conf.header_schema, headers)
         if not ok then
             core.log.error("req schema validation failed", err)
-            return 400, err
+            return conf.rejected_code, conf.rejected_msg or err
         end
     end
 
     if conf.body_schema then
-        req_read_body()
-        local req_body, error
-        local body = ngx.req.get_body_data()
-
+        local req_body
+        local body, err = core.request.get_body(conf.max_req_body_size)
         if not body then
-            local filename = ngx.req.get_body_file()
-            if not filename then
-                return 500
+            if err then
+                core.log.error("failed to get body: ", err)
             end
-            local fd = io.open(filename, 'rb')
-            if not fd then
-                return 500
-            end
-            body = fd:read('*a')
+            return conf.rejected_code, conf.rejected_msg
         end
 
-        if headers["content-type"] == "application/x-www-form-urlencoded" then
-            req_body, error = ngx.decode_args(body)
+        local body_is_json = true
+        local content_type = headers["content-type"]
+        -- a duplicated Content-Type is ambiguous: APISIX and the upstream may
+        -- parse the body differently, bypassing validation. reject it.
+        if type(content_type) == "table" then
+            core.log.error("duplicated Content-Type header")
+            return conf.rejected_code, conf.rejected_msg
+        end
+
+        if type(content_type) == "string"
+            and core.string.has_prefix(
+                content_type:lower(),
+                "application/x-www-form-urlencoded"
+            )
+        then
+            -- use 0 to avoid truncated result and keep the behavior as the
+            -- same as other platforms
+            req_body, err = ngx.decode_args(body, 0)
+            body_is_json = false
         else -- JSON as default
-            req_body, error = core.json.decode(body)
+            req_body, err = core.json.decode(body)
         end
 
         if not req_body then
-          core.log.error('failed to decode the req body', error)
-          return 400, error
+            core.log.error('failed to decode the req body: ', err)
+            return conf.rejected_code, conf.rejected_msg or err
         end
 
         local ok, err = core.schema.check(conf.body_schema, req_body)
         if not ok then
-          core.log.error("req schema validation failed", err)
-          return 400, err
+            core.log.error("req schema validation failed: ", err)
+            return conf.rejected_code, conf.rejected_msg or err
+        end
+
+        if body_is_json then
+            -- ensure the JSON we check is the JSON we pass to the upstream,
+            -- see https://bishopfox.com/blog/json-interoperability-vulnerabilities
+            req_body = core.json.encode(req_body)
+            ngx.req.set_body_data(req_body)
         end
     end
 end

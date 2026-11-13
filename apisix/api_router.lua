@@ -17,59 +17,14 @@
 local require = require
 local router = require("apisix.utils.router")
 local plugin_mod = require("apisix.plugin")
-local ip_restriction = require("apisix.plugins.ip-restriction")
 local core = require("apisix.core")
 local ipairs = ipairs
+local ngx_header = ngx.header
 local type = type
 
 
 local _M = {}
-local match_opts = {}
 local has_route_not_under_apisix
-local interceptors = {
-    ["ip-restriction"] = {
-        run = function (conf, ctx)
-            return ip_restriction.access(conf, ctx)
-        end,
-        schema = ip_restriction.schema,
-    }
-}
-
-
-_M.interceptors_schema = {
-    ["$comment"] = "this is the mark for our interceptors schema",
-    type = "array",
-    items = {
-        type = "object",
-        minItems = 1,
-        properties = {
-            name = {
-                type = "string",
-                enum = {"ip-restriction"},
-            },
-            conf = {
-                type = "object",
-            }
-        },
-        required = {"name", "conf"},
-        dependencies = {
-            name = {
-                oneOf = {}
-            }
-        }
-    }
-}
-for name, attrs in pairs(interceptors) do
-    core.table.insert(_M.interceptors_schema.items.properties.name.enum, name)
-    core.table.insert(_M.interceptors_schema.items.dependencies.name.oneOf, {
-        properties = {
-            name = {
-                enum = {name},
-            },
-            conf = attrs.schema,
-        }
-    })
-end
 
 
 local fetch_api_router
@@ -83,19 +38,28 @@ function fetch_api_router()
     for _, plugin in ipairs(plugin_mod.plugins) do
         local api_fun = plugin.api
         if api_fun then
-            local name = plugin.name
             local api_routes = api_fun()
             core.log.debug("fetched api routes: ",
                            core.json.delay_encode(api_routes, true))
             for _, route in ipairs(api_routes) do
+                if route.uri == nil then
+                    core.log.error("got nil uri in api route: ",
+                                   core.json.delay_encode(route, true))
+                    break
+                end
+
                 local typ_uri = type(route.uri)
-                if typ_uri == "string" then
-                    has_route_not_under_apisix =
-                        not core.string.has_prefix(route.uri, "/apisix/")
-                else
-                    for _, uri in ipairs(route.uri) do
+                if not has_route_not_under_apisix then
+                    if typ_uri == "string" then
                         if not core.string.has_prefix(route.uri, "/apisix/") then
                             has_route_not_under_apisix = true
+                        end
+                    else
+                        for _, uri in ipairs(route.uri) do
+                            if not core.string.has_prefix(uri, "/apisix/") then
+                                has_route_not_under_apisix = true
+                                break
+                            end
                         end
                     end
                 end
@@ -104,25 +68,12 @@ function fetch_api_router()
                         methods = route.methods,
                         paths = route.uri,
                         handler = function (api_ctx)
-                            local code, body
-
-                            local metadata = plugin_mod.plugin_metadata(name)
-                            if metadata and metadata.value.interceptors then
-                                for _, rule in ipairs(metadata.value.interceptors) do
-                                    local f = interceptors[rule.name]
-                                    if f == nil then
-                                        core.log.error("unknown interceptor: ", rule.name)
-                                    else
-                                        code, body = f.run(rule.conf, api_ctx)
-                                        if code or body then
-                                            return core.response.exit(code, body)
-                                        end
-                                    end
-                                end
-                            end
-
-                            code, body = route.handler(api_ctx)
+                            local code, body = route.handler(api_ctx)
                             if code or body then
+                                if type(body) == "table" and ngx_header["Content-Type"] == nil then
+                                    core.response.set_header("Content-Type", "application/json")
+                                end
+
                                 core.response.exit(code, body)
                             end
                         end
@@ -153,10 +104,11 @@ function _M.match(api_ctx)
         return false
     end
 
-    core.table.clear(match_opts)
+    local match_opts = core.tablepool.fetch("api_router_match_opts", 0, 4)
     match_opts.method = api_ctx.var.request_method
 
     local ok = api_router:dispatch(api_ctx.var.uri, match_opts, api_ctx)
+    core.tablepool.release("api_router_match_opts", match_opts)
     return ok
 end
 

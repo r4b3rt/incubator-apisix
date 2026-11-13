@@ -43,15 +43,17 @@ add_block_preprocessor(sub {
         "uri": "/index.html"
     }]])
     exp_data = {
-        node = {
-            value = req_data,
-            key = "/apisix/routes/1",
-        },
-        action = "set",
+        value = req_data,
+        key = "/apisix/routes/1",
     }
 _EOC_
 
     $block->set_value("init_by_lua_block", $init_by_lua_block);
+
+    if (!defined $block->request) {
+        $block->set_value("request", "GET /t");
+    }
+
 });
 
 run_tests;
@@ -78,9 +80,9 @@ __DATA__
                     }
                 }
             }]])
-            exp_data.node.value.upstream.checks = req_data.upstream.checks
+            exp_data.value.upstream.checks = req_data.upstream.checks
 
-            local code, body = t('/apisix/admin/routes/1',
+            local code, body, res = t('/apisix/admin/routes/1',
                 ngx.HTTP_PUT,
                 req_data,
                 exp_data
@@ -90,12 +92,8 @@ __DATA__
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -125,7 +123,7 @@ passed
                     }
                 }
             }]])
-            exp_data.node.value.upstream.checks = req_data.upstream.checks
+            exp_data.value.upstream.checks = req_data.upstream.checks
 
             local code, body = t('/apisix/admin/routes/1',
                 ngx.HTTP_PUT,
@@ -137,12 +135,8 @@ passed
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -166,13 +160,9 @@ passed
             ngx.print(body)
         }
     }
---- request
-GET /t
 --- error_code: 400
 --- response_body
-{"error_msg":"invalid configuration: property \"upstream\" validation failed: property \"checks\" validation failed: property \"active\" validation failed: property \"healthy\" validation failed: property \"successes\" validation failed: expected 255 to be smaller than 254"}
---- no_error_log
-[error]
+{"error_msg":"invalid configuration: property \"upstream\" validation failed: property \"checks\" validation failed: property \"active\" validation failed: property \"healthy\" validation failed: property \"successes\" validation failed: expected 255 to be at most 254"}
 
 
 
@@ -196,13 +186,9 @@ GET /t
             ngx.print(body)
         }
     }
---- request
-GET /t
 --- error_code: 400
 --- response_body
-{"error_msg":"invalid configuration: property \"upstream\" validation failed: property \"checks\" validation failed: property \"active\" validation failed: property \"healthy\" validation failed: property \"successes\" validation failed: expected 0 to be greater than 1"}
---- no_error_log
-[error]
+{"error_msg":"invalid configuration: property \"upstream\" validation failed: property \"checks\" validation failed: property \"active\" validation failed: property \"healthy\" validation failed: property \"successes\" validation failed: expected 0 to be at least 1"}
 
 
 
@@ -226,13 +212,9 @@ GET /t
             ngx.print(body)
         }
     }
---- request
-GET /t
 --- error_code: 400
 --- response_body
-{"error_msg":"invalid configuration: property \"upstream\" validation failed: property \"checks\" validation failed: property \"passive\" validation failed: property \"unhealthy\" validation failed: property \"http_statuses\" validation failed: failed to validate item 2: expected 600 to be smaller than 599"}
---- no_error_log
-[error]
+{"error_msg":"invalid configuration: property \"upstream\" validation failed: property \"checks\" validation failed: property \"passive\" validation failed: property \"unhealthy\" validation failed: property \"http_statuses\" validation failed: failed to validate item 2: expected 600 to be at most 599"}
 
 
 
@@ -254,13 +236,9 @@ GET /t
             ngx.print(body)
         }
     }
---- request
-GET /t
 --- error_code: 400
 --- response_body
 {"error_msg":"invalid configuration: property \"upstream\" validation failed: property \"checks\" validation failed: property \"active\" validation failed: property \"type\" validation failed: matches none of the enum values"}
---- no_error_log
-[error]
 
 
 
@@ -284,13 +262,9 @@ GET /t
             ngx.print(body)
         }
     }
---- request
-GET /t
 --- error_code: 400
 --- response_body
 {"error_msg":"invalid configuration: property \"upstream\" validation failed: property \"checks\" validation failed: property \"active\" validation failed: property \"healthy\" validation failed: property \"http_statuses\" validation failed: expected unique items but items 1 and 2 are equal"}
---- no_error_log
-[error]
 
 
 
@@ -314,13 +288,9 @@ GET /t
             ngx.print(body)
         }
     }
---- request
-GET /t
 --- error_code: 400
 --- response_body
 {"error_msg":"invalid configuration: property \"upstream\" validation failed: property \"checks\" validation failed: property \"active\" validation failed: property \"unhealthy\" validation failed: property \"http_failures\" validation failed: wrong type: expected integer, got number"}
---- no_error_log
-[error]
 
 
 
@@ -341,7 +311,7 @@ GET /t
                     "req_headers": ["User-Agent: curl/7.29.0"]
                 }
             }]])
-            exp_data.node.value.upstream.checks = req_data.upstream.checks
+            exp_data.value.upstream.checks = req_data.upstream.checks
 
             local code, body = t('/apisix/admin/routes/1',
                 ngx.HTTP_PUT,
@@ -353,12 +323,8 @@ GET /t
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -379,7 +345,7 @@ passed
                     "req_headers": ["User-Agent: curl/7.29.0", "Accept: */*"]
                 }
             }]])
-            exp_data.node.value.upstream.checks = req_data.upstream.checks
+            exp_data.value.upstream.checks = req_data.upstream.checks
 
             local code, body = t('/apisix/admin/routes/1',
                 ngx.HTTP_PUT,
@@ -391,12 +357,8 @@ passed
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -417,7 +379,7 @@ passed
                     "req_headers": ["User-Agent: curl/7.29.0", 2233]
                 }
             }]])
-            exp_data.node.value.upstream.checks = req_data.upstream.checks
+            exp_data.value.upstream.checks = req_data.upstream.checks
 
             local code, body = t('/apisix/admin/routes/1',
                 ngx.HTTP_PUT,
@@ -429,13 +391,9 @@ passed
             ngx.print(body)
         }
     }
---- request
-GET /t
 --- error_code: 400
 --- response_body
 {"error_msg":"invalid configuration: property \"upstream\" validation failed: property \"checks\" validation failed: property \"active\" validation failed: property \"req_headers\" validation failed: failed to validate item 2: wrong type: expected string, got number"}
---- no_error_log
-[error]
 
 
 
@@ -457,7 +415,7 @@ GET /t
                     }
                 }
             }]])
-            exp_data.node.value.upstream.checks = req_data.upstream.checks
+            exp_data.value.upstream.checks = req_data.upstream.checks
 
             local code, body = t('/apisix/admin/routes/1',
                 ngx.HTTP_PUT,
@@ -469,17 +427,64 @@ GET /t
             ngx.print(body)
         }
     }
---- request
-GET /t
 --- error_code: 400
 --- response_body
-{"error_msg":"invalid configuration: property \"upstream\" validation failed: property \"checks\" validation failed: object matches none of the requireds: [\"active\"] or [\"active\",\"passive\"]"}
---- no_error_log
-[error]
+{"error_msg":"invalid configuration: property \"upstream\" validation failed: property \"checks\" validation failed: object matches none of the required: [\"active\"] or [\"active\",\"passive\"]"}
 
 
 
-=== TEST 13: number type timeout
+=== TEST 13: only active
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+
+            req_data.upstream.checks = json.decode([[{
+                "active": {
+                    "http_path": "/status",
+                    "host": "foo.com",
+                    "healthy": {
+                        "interval": 2,
+                        "successes": 1
+                    },
+                    "unhealthy": {
+                        "interval": 1,
+                        "http_failures": 2
+                    }
+                }
+            }]])
+            exp_data.value.upstream.checks.active = req_data.upstream.checks.active
+            exp_data.value.upstream.checks.passive = {
+                type = "http",
+                healthy = {
+                    http_statuses = { 200, 201, 202, 203, 204, 205, 206, 207, 208, 226,
+                                      300, 301, 302, 303, 304, 305, 306, 307, 308 },
+                    successes = 0,
+                },
+                unhealthy = {
+                    http_statuses = { 429, 500, 503 },
+                    tcp_failures = 0,
+                    timeouts = 0,
+                    http_failures = 0,
+                }
+            }
+
+            local code, body = t('/apisix/admin/routes/1',
+                ngx.HTTP_PUT,
+                req_data,
+                exp_data
+            )
+
+            ngx.status = code
+            ngx.say(body)
+        }
+    }
+--- response_body
+passed
+
+
+
+=== TEST 14: number type timeout
 --- config
     location /t {
         content_by_lua_block {
@@ -500,7 +505,7 @@ GET /t
                     }
                 }
             }]])
-            exp_data.node.value.upstream.checks = req_data.upstream.checks
+            exp_data.value.upstream.checks = req_data.upstream.checks
 
             local code, body = t('/apisix/admin/routes/1',
                 ngx.HTTP_PUT,
@@ -512,9 +517,5 @@ GET /t
             ngx.say(body)
         }
     }
---- request
-GET /t
 --- response_body
 passed
---- no_error_log
-[error]

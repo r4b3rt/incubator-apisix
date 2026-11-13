@@ -43,8 +43,6 @@ GET /t
 --- response_body
 encode: ["first","a",1,true]
 encode: ["a",1,true,true]
---- no_error_log
-[error]
 
 
 
@@ -75,8 +73,6 @@ encode: ["a",1,true,true]
 GET /t
 --- response_body
 ok
---- no_error_log
-[error]
 
 
 
@@ -101,8 +97,6 @@ GET /t
 --- response_body
 value
 nil
---- no_error_log
-[error]
 
 
 
@@ -134,8 +128,6 @@ nil
 ok
 --- request
 GET /t
---- no_error_log
-[error]
 
 
 
@@ -169,8 +161,6 @@ GET /t
 ok
 --- request
 GET /t
---- no_error_log
-[error]
 
 
 
@@ -202,5 +192,232 @@ GET /t
 ok
 --- request
 GET /t
+
+
+
+=== TEST 7: deepcopy should keep metatable
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            local deepcopy = core.table.deepcopy
+            local t = setmetatable({}, core.json.array_mt)
+            local actual = core.json.encode(deepcopy(t))
+            local expect = "[]"
+            if actual ~= expect then
+                ngx.say("expect ", expect, ", actual ", actual)
+                return
+            end
+            ngx.say("ok")
+        }
+    }
+--- request
+GET /t
+--- response_body
+ok
+
+
+
+=== TEST 8: deepcopy copy same table only once
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            local tmp = { name = "tmp", priority = 1, enabled = true }
+            local origin = { a = { b = tmp }, c = tmp}
+            local copy = core.table.deepcopy(origin)
+            if not core.table.deep_eq(copy, origin) then
+                ngx.say("copy: ", json.encode(expect), ", origin: ", json.encode(actual))
+                return
+            end
+            if copy.a.b ~= copy.c then
+                ngx.say("copy.a.b should be the same as copy.c")
+                return
+            end
+            ngx.say("ok")
+        }
+    }
+--- request
+GET /t
+--- response_body
+ok
+
+
+
+=== TEST 9: reference same table
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            local deepcopy = core.table.deepcopy
+            local tab1 = {name = "tab1"}
+            local tab2 = {
+                a = tab1,
+                b = tab1
+            }
+            local tab_copied = deepcopy(tab2)
+
+            ngx.say("table copied: ", require("toolkit.json").encode(tab_copied))
+
+            ngx.say("tab1 == tab2.a: ", tab1 == tab2.a)
+            ngx.say("tab2.a == tab2.b: ", tab2.a == tab2.b)
+
+            ngx.say("tab_copied.a == tab1: ", tab_copied.a == tab1)
+            ngx.say("tab_copied.a == tab_copied.b: ", tab_copied.a == tab_copied.b)
+        }
+    }
+--- request
+GET /t
+--- response_body
+table copied: {"a":{"name":"tab1"},"b":{"name":"tab1"}}
+tab1 == tab2.a: true
+tab2.a == tab2.b: true
+tab_copied.a == tab1: false
+tab_copied.a == tab_copied.b: true
+
+
+
+=== TEST 10: reference table self(root node)
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            local deepcopy = core.table.deepcopy
+            local tab1 = {name = "tab1"}
+            local tab2 = {
+                a = tab1,
+            }
+            tab2.c = tab2
+
+            local tab_copied = deepcopy(tab2)
+
+            ngx.say("tab_copied.a == tab1: ", tab_copied.a == tab_copied.b)
+            ngx.say("tab_copied == tab_copied.c: ", tab_copied == tab_copied.c)
+        }
+    }
+--- request
+GET /t
+--- response_body
+tab_copied.a == tab1: false
+tab_copied == tab_copied.c: true
+
+
+
+=== TEST 11: reference table self(sub node)
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            local deepcopy = core.table.deepcopy
+            local tab_org = {
+                a = {
+                    a2 = "a2"
+                },
+            }
+            tab_org.b = tab_org.a
+
+            local tab_copied = deepcopy(tab_org)
+            ngx.say("table copied: ", require("toolkit.json").encode(tab_copied))
+            ngx.say("tab_copied.a == tab_copied.b: ", tab_copied.a == tab_copied.b)
+        }
+    }
+--- request
+GET /t
+--- response_body
+table copied: {"a":{"a2":"a2"},"b":{"a2":"a2"}}
+tab_copied.a == tab_copied.b: true
+
+
+
+=== TEST 12: shallow copy
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            local deepcopy = core.table.deepcopy
+            local t1 = {name = "tab1"}
+            local t2 = {name = "tab2"}
+            local tab = {
+                a = {b = {c = t1}},
+                x = {y = t2},
+            }
+            local tab_copied = deepcopy(tab, { shallows = { "self.a.b.c" }})
+
+            ngx.say("table copied: ", require("toolkit.json").encode(tab_copied))
+
+            ngx.say("tab_copied.a.b.c == tab.a.b.c1: ", tab_copied.a.b.c == tab.a.b.c)
+            ngx.say("tab_copied.a.b.c == t1: ", tab_copied.a.b.c == t1)
+            ngx.say("tab_copied.x.y == tab.x.y: ", tab_copied.x.y == tab.x.y)
+            ngx.say("tab_copied.x.y == t2: ", tab_copied.x.y == t2)
+        }
+    }
+--- request
+GET /t
+--- response_body
+table copied: {"a":{"b":{"c":{"name":"tab1"}}},"x":{"y":{"name":"tab2"}}}
+tab_copied.a.b.c == tab.a.b.c1: true
+tab_copied.a.b.c == t1: true
+tab_copied.x.y == tab.x.y: false
+tab_copied.x.y == t2: false
+
+
+
+=== TEST 13: shallow_prefix
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            local deepcopy = core.table.deepcopy
+            local plugin1 = {name = "plugin1"}
+            local plugin2 = {name = "plugin2"}
+            local tab = {
+                plugins = {
+                    p1 = plugin1,
+                    p2 = plugin2,
+                },
+            }
+
+            local tab_copied = deepcopy(tab, { shallow_prefix = "self.plugins" })
+
+            tab_copied.plugins.p1 = {name = "plugin1_new_modified"}
+            tab_copied.plugins.p2.name = "plugin2_modified"
+
+            ngx.say("table copied: ", require("toolkit.json").encode(tab_copied))
+            ngx.say("table original: ", require("toolkit.json").encode(tab))
+        }
+    }
+--- request
+GET /t
+--- response_body
+table copied: {"plugins":{"p1":{"name":"plugin1_new_modified"},"p2":{"name":"plugin2_modified"}}}
+table original: {"plugins":{"p1":{"name":"plugin1"},"p2":{"name":"plugin2_modified"}}}
+--- no_error_log
+[error]
+
+
+
+=== TEST 14: shallow_prefix only matches at a path separator
+--- config
+    location /t {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            local deepcopy = core.table.deepcopy
+            local tab = {
+                plugins = { p1 = {name = "p1"} },
+                -- a sibling whose name starts with the prefix
+                plugins2 = { p2 = {name = "p2"} },
+            }
+
+            local tab_copied = deepcopy(tab, { shallow_prefix = "self.plugins" })
+
+            ngx.say("plugins.p1 shared: ", tab_copied.plugins.p1 == tab.plugins.p1)
+            ngx.say("plugins2.p2 shared: ", tab_copied.plugins2.p2 == tab.plugins2.p2)
+        }
+    }
+--- request
+GET /t
+--- response_body
+plugins.p1 shared: true
+plugins2.p2 shared: false
 --- no_error_log
 [error]

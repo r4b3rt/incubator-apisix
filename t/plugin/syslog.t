@@ -20,6 +20,42 @@ repeat_each(1);
 no_long_string();
 no_root_location();
 
+add_block_preprocessor(sub {
+    my ($block) = @_;
+
+    # The plugin no longer logs the rfc5424 payload; reproduce the
+    # observability the tests rely on by logging each batch entry from a
+    # test-only hook.
+    my $log_hook = <<_EOC_;
+    do
+        local bp_manager = require("apisix.utils.batch-processor-manager")
+        local core = require("apisix.core")
+        local function log_collect_data(entry)
+            local data = type(entry) == "table" and core.json.encode(entry) or entry
+            core.log.info("collect_data:", data)
+        end
+        local _orig_add = bp_manager.add_entry
+        bp_manager.add_entry = function(self, conf, entry)
+            local ok = _orig_add(self, conf, entry)
+            if ok then
+                log_collect_data(entry)
+            end
+            return ok
+        end
+        local _orig_new = bp_manager.add_entry_to_new_processor
+        bp_manager.add_entry_to_new_processor = function(self, conf, entry, ctx, func)
+            local ok = _orig_new(self, conf, entry, ctx, func)
+            if ok then
+                log_collect_data(entry)
+            end
+            return ok
+        end
+    end
+_EOC_
+    $block->set_value("extra_init_by_lua",
+                      ($block->extra_init_by_lua // '') . $log_hook);
+});
+
 run_tests;
 
 __DATA__
@@ -31,7 +67,7 @@ __DATA__
             local plugin = require("apisix.plugins.syslog")
             local ok, err = plugin.check_schema({
                  host = "127.0.0.1",
-                 port = 3000,
+                 port = 5140,
             })
             if not ok then
                 ngx.say(err)
@@ -43,8 +79,6 @@ __DATA__
 GET /t
 --- response_body
 done
---- no_error_log
-[error]
 
 
 
@@ -65,8 +99,6 @@ GET /t
 --- response_body
 property "port" is required
 done
---- no_error_log
-[error]
 
 
 
@@ -77,7 +109,7 @@ done
             local plugin = require("apisix.plugins.syslog")
             local ok, err = plugin.check_schema({
                  host = "127.0.0.1",
-                 port = "3000",
+                 port = "5140",
             })
             if not ok then
                 ngx.say(err)
@@ -90,8 +122,6 @@ GET /t
 --- response_body
 property "port" validation failed: wrong type: expected integer, got string
 done
---- no_error_log
-[error]
 
 
 
@@ -106,7 +136,7 @@ done
                         "plugins": {
                             "syslog": {
                                 "host" : "127.0.0.1",
-                                "port" : 5044
+                                "port" : 5140
                             }
                         },
                         "upstream": {
@@ -116,27 +146,6 @@ done
                             "type": "roundrobin"
                         },
                         "uri": "/hello"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                              "syslog": {
-                                 "host" : "127.0.0.1",
-                                 "port" : 5044
-                              }
-                            },
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1980": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "uri": "/hello"
-                        },
-                        "key": "/apisix/routes/1"
-                    },
-                    "action": "set"
                 }]]
                 )
             if code >= 300 then
@@ -149,8 +158,6 @@ done
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -159,8 +166,6 @@ passed
 GET /hello
 --- response_body
 hello world
---- no_error_log
-[error]
 --- wait: 0.2
 
 
@@ -173,7 +178,7 @@ hello world
             local logger_socket = require("resty.logger.socket")
             local logger, err = logger_socket:new({
                     host = "127.0.0.1",
-                    port = 5044,
+                    port = 5140,
                     flush_limit = 100,
             })
 
@@ -199,8 +204,6 @@ hello world
 GET /t
 --- response_body
 done
---- no_error_log
-[error]
 
 
 
@@ -211,13 +214,14 @@ done
             local t = require("lib.test_admin").test
             local code, body = t('/apisix/admin/routes/1',
                 ngx.HTTP_PUT,
+                -- before 2.13.0, timeout is incorrectly treated as inactive_timeout
                 [[{
                     "plugins": {
                         "syslog": {
                                 "host" : "127.0.0.1",
-                                "port" : 5044,
+                                "port" : 5140,
                                 "flush_limit" : 1,
-                                "timeout": 1
+                                "inactive_timeout": 1
                             }
                     },
                     "upstream": {
@@ -261,8 +265,6 @@ GET /t
 --- response_body
 passed
 hello world
---- no_error_log
-[error]
 --- error_log
 try to lock with key route#1
 unlock with key route#1
@@ -270,7 +272,15 @@ unlock with key route#1
 
 
 
-=== TEST 8: check plugin configuration updating
+=== TEST 8: check log
+--- exec
+tail -n 1 ci/pod/vector/syslog-tcp.log
+--- response_body eval
+qr/.*apisix_latency.*/
+
+
+
+=== TEST 9: check plugin configuration updating
 --- config
     location /t {
         content_by_lua_block {
@@ -292,28 +302,6 @@ unlock with key route#1
                             "type": "roundrobin"
                         },
                         "uri": "/opentracing"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                                "syslog": {
-                                    "host": "127.0.0.1",
-                                    "port": 5044,
-                                    "batch_max_size": 1
-                                }
-                            },
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1982": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "uri": "/opentracing"
-                        },
-                        "key": "/apisix/routes/1"
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -347,28 +335,6 @@ unlock with key route#1
                             "type": "roundrobin"
                         },
                         "uri": "/opentracing"
-                }]],
-                [[{
-                    "node": {
-                        "value": {
-                            "plugins": {
-                                "syslog": {
-                                    "host": "127.0.0.1",
-                                    "port": 5045,
-                                    "batch_max_size": 1
-                                }
-                            },
-                            "upstream": {
-                                "nodes": {
-                                    "127.0.0.1:1982": 1
-                                },
-                                "type": "roundrobin"
-                            },
-                            "uri": "/opentracing"
-                        },
-                        "key": "/apisix/routes/1"
-                    },
-                    "action": "set"
                 }]]
                 )
 
@@ -402,3 +368,399 @@ qr/sending a batch logs to 127.0.0.1:(\d+)/
 --- grep_error_log_out
 sending a batch logs to 127.0.0.1:5044
 sending a batch logs to 127.0.0.1:5045
+
+
+
+=== TEST 10: add log format
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/plugin_metadata/syslog',
+                 ngx.HTTP_PUT,
+                 [[{
+                    "log_format": {
+                        "host": "$host",
+                        "client_ip": "$remote_addr",
+                        "upstream": "$upstream_addr"
+                    }
+                }]]
+                )
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 11: Add route and Enable Syslog Plugin, batch_max_size=1
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "plugins": {
+                            "syslog": {
+                                "batch_max_size": 1,
+                                "disable": false,
+                                "flush_limit": 1,
+                                "host" : "127.0.0.1",
+                                "port" : 5140
+                            }
+                        },
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1980": 1
+                            },
+                            "type": "roundrobin"
+                        },
+                        "uri": "/hello"
+                }]]
+                )
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 12: hit route and report sys logger
+--- extra_init_by_lua
+    local syslog = require("apisix.plugins.syslog.init")
+    local json = require("apisix.core.json")
+    local log = require("apisix.core.log")
+    local old_f = syslog.push_entry
+    syslog.push_entry = function(conf, ctx, entry)
+        log.info("syslog-log-format => " ..  json.encode(entry))
+        return old_f(conf, ctx, entry)
+    end
+--- request
+GET /hello
+--- response_body
+hello world
+--- wait: 0.5
+--- no_error_log
+[error]
+--- error_log eval
+qr/syslog-log-format.*\{.*"upstream":"127.0.0.1:\d+"/
+
+
+
+=== TEST 13: check log
+--- exec
+tail -n 1 ci/pod/vector/syslog-tcp.log
+--- response_body eval
+qr/.*\"host\":\"localhost\".*/
+
+
+
+=== TEST 14: log format in plugin
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "plugins": {
+                            "syslog": {
+                                "batch_max_size": 1,
+                                "flush_limit": 1,
+                                "log_format": {
+                                    "vip": "$remote_addr"
+                                },
+                                "host" : "127.0.0.1",
+                                "port" : 5140
+                            }
+                        },
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1980": 1
+                            },
+                            "type": "roundrobin"
+                        },
+                        "uri": "/hello"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+                ngx.say(body)
+                return
+            end
+
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 15: access
+--- extra_init_by_lua
+    local syslog = require("apisix.plugins.syslog.init")
+    local json = require("apisix.core.json")
+    local log = require("apisix.core.log")
+    local old_f = syslog.push_entry
+    syslog.push_entry = function(conf, ctx, entry)
+        assert(entry.vip == "127.0.0.1")
+        log.info("push_entry is called with data: ", json.encode(entry))
+        return old_f(conf, ctx, entry)
+    end
+--- request
+GET /hello
+--- response_body
+hello world
+--- wait: 0.5
+--- no_error_log
+[error]
+--- error_log
+push_entry is called with data
+
+
+
+=== TEST 16: check log
+--- exec
+tail -n 1 ci/pod/vector/syslog-tcp.log
+--- response_body eval
+qr/.*vip.*/
+
+
+
+=== TEST 17: test udp mode
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "plugins": {
+                            "syslog": {
+                                "batch_max_size": 1,
+                                "disable": false,
+                                "flush_limit": 1,
+                                "host" : "127.0.0.1",
+                                "port" : 5150,
+                                "sock_type": "udp"
+                            }
+                        },
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1980": 1
+                            },
+                            "type": "roundrobin"
+                        },
+                        "uri": "/hello"
+                }]]
+                )
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 18: hit
+--- request
+GET /hello
+
+
+
+=== TEST 19: check log
+--- exec
+tail -n 1 ci/pod/vector/syslog-udp.log
+--- response_body eval
+qr/.*upstream.*/
+
+
+
+=== TEST 20: add plugin with 'include_req_body' setting, collect request log
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            t('/apisix/admin/plugin_metadata/syslog', ngx.HTTP_DELETE)
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "plugins": {
+                            "syslog": {
+                                "batch_max_size": 1,
+                                "flush_limit": 1,
+                                "host" : "127.0.0.1",
+                                "port" : 5140,
+                                "include_req_body": true
+                            }
+                        },
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1980": 1
+                            },
+                            "type": "roundrobin"
+                        },
+                        "uri": "/hello"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+                ngx.say(body)
+                return
+            end
+
+            ngx.say(body)
+
+            local code, _, body = t("/hello", "POST", "{\"sample_payload\":\"hello\"}")
+        }
+    }
+--- request
+GET /t
+--- error_log
+"body":"{\"sample_payload\":\"hello\"}"
+
+
+
+=== TEST 21: add plugin with 'include_resp_body' setting, collect response log
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            t('/apisix/admin/plugin_metadata/syslog', ngx.HTTP_DELETE)
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "plugins": {
+                            "syslog": {
+                                "batch_max_size": 1,
+                                "flush_limit": 1,
+                                "host" : "127.0.0.1",
+                                "port" : 5140,
+                                "include_resp_body": true
+                            }
+                        },
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1980": 1
+                            },
+                            "type": "roundrobin"
+                        },
+                        "uri": "/hello"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+                ngx.say(body)
+                return
+            end
+
+            ngx.say(body)
+
+            local code, _, body = t("/hello", "POST", "{\"sample_payload\":\"hello\"}")
+        }
+    }
+--- request
+GET /t
+--- error_log
+"body":"hello world\n"
+
+
+
+=== TEST 22: add syslog plugin for the failure tests
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            t('/apisix/admin/plugin_metadata/syslog', ngx.HTTP_DELETE)
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                        "plugins": {
+                            "syslog": {
+                                "batch_max_size": 1,
+                                "flush_limit": 1,
+                                "host" : "127.0.0.1",
+                                "port" : 5140
+                            }
+                        },
+                        "upstream": {
+                            "nodes": {
+                                "127.0.0.1:1980": 1
+                            },
+                            "type": "roundrobin"
+                        },
+                        "uri": "/hello"
+                }]]
+                )
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 23: hit route, send failure is reported with a separator before the cause
+--- extra_init_by_lua
+    local logger_socket = require("resty.logger.socket")
+    logger_socket.new = function()
+        return {
+            log = function()
+                return nil, "mocked send failure"
+            end
+        }
+    end
+--- request
+GET /hello
+--- response_body
+hello world
+--- wait: 0.5
+--- error_log
+failed to log message: mocked send failure
+
+
+
+=== TEST 24: hit route, logger init failure is reported instead of crashing
+--- extra_init_by_lua
+    local logger_socket = require("resty.logger.socket")
+    logger_socket.new = function()
+        return nil, "mocked connection failure"
+    end
+--- request
+GET /hello
+--- response_body
+hello world
+--- wait: 0.5
+--- error_log
+failed when initiating the sys logger processor: mocked connection failure
+--- no_error_log
+attempt to index

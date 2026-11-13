@@ -16,42 +16,43 @@
 --
 local expr = require("resty.expr.v1")
 local core = require("apisix.core")
+local apisix_upstream = require("apisix.upstream")
+local resource = require("apisix.admin.resource")
 local schema_plugin = require("apisix.admin.plugins").check_schema
-local upstreams = require("apisix.admin.upstreams")
-local utils = require("apisix.admin.utils")
-local tostring = tostring
+local plugins_encrypt_conf = require("apisix.admin.plugins").encrypt_conf
 local type = type
 local loadstring = loadstring
+local ipairs = ipairs
+local jp = require("jsonpath")
 
-
-local _M = {
-    version = 0.2,
-}
-
-
-local function check_conf(id, conf, need_id)
-    if not conf then
-        return nil, {error_msg = "missing configurations"}
+local function validate_post_arg(node)
+    if type(node) ~= "table" then
+        return true
     end
 
-    id = id or conf.id
-    if need_id and not id then
-        return nil, {error_msg = "missing route id"}
+    -- Handle post_arg conditions
+    if #node >= 3 and type(node[1]) == "string" and node[1]:find("^post_arg%.") then
+        local key = node[1]
+        local json_path = "$." .. key:sub(11)  -- Remove "post_arg." prefix
+        local _, err = jp.parse(json_path)
+        if err then
+            return false, err
+        end
+        return true
     end
 
-    if not need_id and id then
-        return nil, {error_msg = "wrong route id, do not need it"}
+    for _, child in ipairs(node) do
+        local ok, err = validate_post_arg(child)
+        if not ok then
+            return false, err
+        end
     end
+    return true
+end
 
-    if need_id and conf.id and tostring(conf.id) ~= tostring(id) then
-        return nil, {error_msg = "wrong route id"}
-    end
 
-    conf.id = id
-
-    core.log.info("schema: ", core.json.delay_encode(core.schema.route))
-    core.log.info("conf  : ", core.json.delay_encode(conf))
-
+local function check_conf(id, conf, need_id, schema, opts)
+    opts = opts or {}
     if conf.host and conf.hosts then
         return nil, {error_msg = "only one of host or hosts is allowed"}
     end
@@ -61,21 +62,21 @@ local function check_conf(id, conf, need_id)
                                  .. "allowed"}
     end
 
-    local ok, err = core.schema.check(core.schema.route, conf)
+    local ok, err = core.schema.check(schema, conf)
     if not ok then
         return nil, {error_msg = "invalid configuration: " .. err}
     end
 
     local upstream_conf = conf.upstream
     if upstream_conf then
-        local ok, err = upstreams.check_upstream_conf(upstream_conf)
+        local ok, err = apisix_upstream.check_upstream_conf(upstream_conf)
         if not ok then
             return nil, {error_msg = err}
         end
     end
 
     local upstream_id = conf.upstream_id
-    if upstream_id then
+    if upstream_id and not opts.skip_references_check then
         local key = "/upstreams/" .. upstream_id
         local res, err = core.etcd.get(key)
         if not res then
@@ -92,7 +93,7 @@ local function check_conf(id, conf, need_id)
     end
 
     local service_id = conf.service_id
-    if service_id then
+    if service_id and not opts.skip_references_check then
         local key = "/services/" .. service_id
         local res, err = core.etcd.get(key)
         if not res then
@@ -104,6 +105,23 @@ local function check_conf(id, conf, need_id)
         if res.status ~= 200 then
             return nil, {error_msg = "failed to fetch service info by "
                                      .. "service id [" .. service_id .. "], "
+                                     .. "response code: " .. res.status}
+        end
+    end
+
+    local plugin_config_id = conf.plugin_config_id
+    if plugin_config_id and not opts.skip_references_check then
+        local key = "/plugin_configs/" .. plugin_config_id
+        local res, err = core.etcd.get(key)
+        if not res then
+            return nil, {error_msg = "failed to fetch plugin config info by "
+                                     .. "plugin config id [" .. plugin_config_id .. "]: "
+                                     .. err}
+        end
+
+        if res.status ~= 200 then
+            return nil, {error_msg = "failed to fetch plugin config info by "
+                                     .. "plugin config id [" .. plugin_config_id .. "], "
                                      .. "response code: " .. res.status}
         end
     end
@@ -120,6 +138,12 @@ local function check_conf(id, conf, need_id)
         if not ok then
             return nil, {error_msg = "failed to validate the 'vars' expression: " .. err}
         end
+    end
+
+    ok, err = validate_post_arg(conf.vars)
+    if not ok  then
+        return nil, {error_msg = "failed to validate the 'vars' expression: " ..
+                                    err}
     end
 
     if conf.filter_func then
@@ -146,147 +170,24 @@ local function check_conf(id, conf, need_id)
         end
     end
 
-    return need_id and id or true
+    return true
 end
 
 
-function _M.put(id, conf, sub_path, args)
-    local id, err = check_conf(id, conf, true)
-    if not id then
-        return 400, err
-    end
-
-    local key = "/routes/" .. id
-
-    local ok, err = utils.inject_conf_with_prev_conf("route", key, conf)
-    if not ok then
-        return 500, {error_msg = err}
-    end
-
-    local res, err = core.etcd.set(key, conf, args.ttl)
-    if not res then
-        core.log.error("failed to put route[", key, "] to etcd: ", err)
-        return 500, {error_msg = err}
-    end
-
-    return res.status, res.body
+local function encrypt_conf(id, conf)
+    apisix_upstream.encrypt_conf(conf.upstream)
+    plugins_encrypt_conf(conf.plugins)
 end
 
 
-function _M.get(id)
-    local key = "/routes"
-    if id then
-        key = key .. "/" .. id
-    end
-
-    local res, err = core.etcd.get(key, not id)
-    if not res then
-        core.log.error("failed to get route[", key, "] from etcd: ", err)
-        return 500, {error_msg = err}
-    end
-
-    return res.status, res.body
-end
-
-
-function _M.post(id, conf, sub_path, args)
-    local id, err = check_conf(id, conf, false)
-    if not id then
-        return 400, err
-    end
-
-    local key = "/routes"
-    -- core.log.info("key: ", key)
-    utils.inject_timestamp(conf)
-    local res, err = core.etcd.push("/routes", conf, args.ttl)
-    if not res then
-        core.log.error("failed to post route[", key, "] to etcd: ", err)
-        return 500, {error_msg = err}
-    end
-
-    return res.status, res.body
-end
-
-
-function _M.delete(id)
-    if not id then
-        return 400, {error_msg = "missing route id"}
-    end
-
-    local key = "/routes/" .. id
-    -- core.log.info("key: ", key)
-    local res, err = core.etcd.delete(key)
-    if not res then
-        core.log.error("failed to delete route[", key, "] in etcd: ", err)
-        return 500, {error_msg = err}
-    end
-
-    return res.status, res.body
-end
-
-
-function _M.patch(id, conf, sub_path, args)
-    if not id then
-        return 400, {error_msg = "missing route id"}
-    end
-
-    if not conf then
-        return 400, {error_msg = "missing new configuration"}
-    end
-
-    if not sub_path or sub_path == "" then
-        if type(conf) ~= "table"  then
-            return 400, {error_msg = "invalid configuration"}
-        end
-    end
-
-    local key = "/routes"
-    if id then
-        key = key .. "/" .. id
-    end
-
-    local res_old, err = core.etcd.get(key)
-    if not res_old then
-        core.log.error("failed to get route [", key, "] in etcd: ", err)
-        return 500, {error_msg = err}
-    end
-
-    if res_old.status ~= 200 then
-        return res_old.status, res_old.body
-    end
-    core.log.info("key: ", key, " old value: ",
-                  core.json.delay_encode(res_old, true))
-
-    local node_value = res_old.body.node.value
-    local modified_index = res_old.body.node.modifiedIndex
-
-    if sub_path and sub_path ~= "" then
-        local code, err, node_val = core.table.patch(node_value, sub_path, conf)
-        node_value = node_val
-        if code then
-            return code, err
-        end
-    else
-        node_value = core.table.merge(node_value, conf);
-    end
-
-    utils.inject_timestamp(node_value, nil, conf)
-
-    core.log.info("new conf: ", core.json.delay_encode(node_value, true))
-
-    local id, err = check_conf(id, node_value, true)
-    if not id then
-        return 400, err
-    end
-
-    local res, err = core.etcd.atomic_set(key, node_value, args.ttl, modified_index)
-    if not res then
-        core.log.error("failed to set new route[", key, "] to etcd: ", err)
-        return 500, {error_msg = err}
-    end
-
-    return res.status, res.body
-end
-
-
-return _M
+return resource.new({
+    name = "routes",
+    kind = "route",
+    schema = core.schema.route,
+    checker = check_conf,
+    encrypt_conf = encrypt_conf,
+    list_filter_fields = {
+        service_id = true,
+        upstream_id = true,
+    },
+})

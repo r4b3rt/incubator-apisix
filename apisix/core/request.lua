@@ -15,32 +15,85 @@
 -- limitations under the License.
 --
 
+--- Get or set the information of the client request.
+--
+-- @module core.request
+
 local lfs = require("lfs")
 local log = require("apisix.core.log")
+local json = require("apisix.core.json")
+local io = require("apisix.core.io")
+local multipart = require("multipart")
+local core_str = require("apisix.core.string")
+local config_local = require("apisix.core.config_local")
+local try_read_attr = require("apisix.core.table").try_read_attr
+local req_add_header
+if ngx.config.subsystem == "http" then
+    local ngx_req = require "ngx.req"
+    req_add_header = ngx_req.add_header
+end
+local is_apisix_or, a6_request = pcall(require, "resty.apisix.request")
 local ngx = ngx
 local get_headers = ngx.req.get_headers
 local clear_header = ngx.req.clear_header
-local tonumber = tonumber
-local error    = error
-local type     = type
-local str_fmt  = string.format
+local tonumber  = tonumber
+local error     = error
+local type      = type
+local str_fmt   = string.format
 local str_lower = string.lower
-local io_open  = io.open
 local req_read_body = ngx.req.read_body
 local req_get_body_data = ngx.req.get_body_data
 local req_get_body_file = ngx.req.get_body_file
+local req_get_post_args = ngx.req.get_post_args
+local req_get_uri_args = ngx.req.get_uri_args
+local req_set_uri_args = ngx.req.set_uri_args
+local table_insert = table.insert
+local req_set_header = ngx.req.set_header
+
+local CONTENT_TYPE_JSON = "application/json"
+local CONTENT_TYPE_FORM_URLENCODED = "application/x-www-form-urlencoded"
+local CONTENT_TYPE_MULTIPART_FORM = "multipart/form-data"
+local DEFAULT_MAX_HEADERS = 100
 
 
 local _M = {}
+
+
+local max_headers
+local function get_max_headers()
+    if max_headers then
+        return max_headers
+    end
+
+    local local_conf, err = config_local.local_conf()
+    if not local_conf then
+        log.error("failed to get local conf: ", err)
+        return DEFAULT_MAX_HEADERS
+    end
+
+    max_headers = try_read_attr(local_conf, "apisix", "max_request_headers_readable")
+                  or DEFAULT_MAX_HEADERS
+    return max_headers
+end
 
 
 local function _headers(ctx)
     if not ctx then
         ctx = ngx.ctx.api_ctx
     end
+
+    if not is_apisix_or then
+        return get_headers(get_max_headers())
+    end
+
+    if a6_request.is_request_header_set() then
+        a6_request.clear_request_header()
+        ctx.headers = get_headers(get_max_headers())
+    end
+
     local headers = ctx.headers
     if not headers then
-        headers = get_headers()
+        headers = get_headers(get_max_headers())
         ctx.headers = headers
     end
 
@@ -57,26 +110,49 @@ local function _validate_header_name(name)
     return name
 end
 
+---
+-- Returns all headers of the current request.
+-- The name and value of the header in return table is in lower case.
+--
+-- @function core.request.headers
+-- @tparam table ctx The context of the current request.
+-- @treturn table all headers
+-- @usage
+-- local headers = core.request.headers(ctx)
 _M.headers = _headers
 
-
+---
+-- Returns the value of the header with the specified name.
+--
+-- @function core.request.header
+-- @tparam table ctx The context of the current request.
+-- @tparam string name The header name, example: "Content-Type".
+-- @treturn string|nil the value of the header, or nil if not found.
+-- @usage
+-- -- You can use upper case for header "Content-Type" here to get the value.
+-- local content_type = core.request.header(ctx, "Content-Type") -- "application/json"
 function _M.header(ctx, name)
     if not ctx then
         ctx = ngx.ctx.api_ctx
     end
-    return _headers(ctx)[name]
+
+    local value = _headers(ctx)[name]
+    return type(value) == "table" and value[1] or value
 end
 
-
-function _M.set_header(ctx, header_name, header_value)
+local function modify_header(ctx, header_name, header_value, override)
     if type(ctx) == "string" then
         -- It would be simpler to keep compatibility if we put 'ctx'
         -- after 'header_value', but the style is too ugly!
         header_value = header_name
         header_name = ctx
-        ctx = nil
+        ctx = ngx.ctx.api_ctx
 
-        log.warn("DEPRECATED: use set_header(ctx, header_name, header_value) instead")
+        if override then
+            log.warn("DEPRECATED: use set_header(ctx, header_name, header_value) instead")
+        else
+            log.warn("DEPRECATED: use add_header(ctx, header_name, header_value) instead")
+        end
     end
 
     local err
@@ -85,13 +161,52 @@ function _M.set_header(ctx, header_name, header_value)
         error(err)
     end
 
-    if ctx and ctx.headers then
-        ctx.headers[header_name] = header_value
+    local changed = false
+    if is_apisix_or then
+        changed = a6_request.is_request_header_set()
     end
 
-    ngx.req.set_header(header_name, header_value)
+    if override then
+        req_set_header(header_name, header_value)
+    else
+        req_add_header(header_name, header_value)
+    end
+
+    if ctx and ctx.var then
+        -- when the header is updated, clear cache of ctx.var
+        ctx.var["http_" .. str_lower(header_name)] = nil
+    end
+
+    if is_apisix_or and not changed then
+        -- if the headers are not changed before,
+        -- we can only update part of the cache instead of invalidating the whole
+        a6_request.clear_request_header()
+        if ctx and ctx.headers then
+            -- the cached table from ngx.req.get_headers() stores keys in
+            -- lower case, so normalize the key to avoid leaving a stale
+            -- entry when the passed name uses a different case
+            local cache_key = str_lower(header_name)
+            if override or not ctx.headers[cache_key] then
+                ctx.headers[cache_key] = header_value
+            else
+                local values = ctx.headers[cache_key]
+                if type(values) == "table" then
+                    table_insert(values, header_value)
+                else
+                    ctx.headers[cache_key] = {values, header_value}
+                end
+            end
+        end
+    end
 end
 
+function _M.set_header(ctx, header_name, header_value)
+    modify_header(ctx, header_name, header_value, true)
+end
+
+function _M.add_header(ctx, header_name, header_value)
+    modify_header(ctx, header_name, header_value, false)
+end
 
 -- return the remote address of client which directly connecting to APISIX.
 -- so if there is a load balancer between downstream client and APISIX,
@@ -122,15 +237,52 @@ function _M.get_remote_client_port(ctx)
 end
 
 
-local function get_file(file_name)
-    local f, err = io_open(file_name, 'r')
-    if not f then
-        return nil, err
+function _M.get_uri_args(ctx)
+    if not ctx then
+        ctx = ngx.ctx.api_ctx
     end
 
-    local req_body = f:read("*all")
-    f:close()
-    return req_body
+    if not ctx.req_uri_args then
+        -- use 0 to avoid truncated result and keep the behavior as the
+        -- same as other platforms
+        local args = req_get_uri_args(0)
+        ctx.req_uri_args = args
+    end
+
+    return ctx.req_uri_args
+end
+
+
+function _M.set_uri_args(ctx, args)
+    if not ctx then
+        ctx = ngx.ctx.api_ctx
+    end
+
+    ctx.req_uri_args = nil
+    return req_set_uri_args(args)
+end
+
+
+function _M.get_post_args(ctx)
+    if not ctx then
+        ctx = ngx.ctx.api_ctx
+    end
+
+    if not ctx.req_post_args then
+        req_read_body()
+
+        -- use 0 to avoid truncated result and keep the behavior as the
+        -- same as other platforms
+        local args, err = req_get_post_args(0)
+        if not args then
+            -- do we need a way to handle huge post forms?
+            log.error("the post form is too large: ", err)
+            args = {}
+        end
+        ctx.req_post_args = args
+    end
+
+    return ctx.req_post_args
 end
 
 
@@ -150,9 +302,11 @@ local function test_expect(var)
 end
 
 
+--- Read the request body.
+--
+-- On a body larger than `max_size` the third return value is `too_large`, so a
+-- caller can answer 413 rather than 500. A read failure is left unclassified.
 function _M.get_body(max_size, ctx)
-    -- TODO: improve the check with set client_max_body dynamically
-    -- which requires to change Nginx source code
     if max_size then
         local var = ctx and ctx.var or ngx.var
         local content_length = tonumber(var.http_content_length)
@@ -166,7 +320,7 @@ function _M.get_body(max_size, ctx)
                     clear_header("expect")
                 end
 
-                return nil, err
+                return nil, err, "too_large"
             end
         end
     end
@@ -177,7 +331,7 @@ function _M.get_body(max_size, ctx)
     if req_body then
         local ok, err = check_size(#req_body, max_size)
         if not ok then
-            return nil, err
+            return nil, err, "too_large"
         end
 
         return req_body
@@ -198,12 +352,93 @@ function _M.get_body(max_size, ctx)
 
         local ok, err = check_size(size, max_size)
         if not ok then
-            return nil, err
+            return nil, err, "too_large"
         end
     end
 
-    local req_body, err = get_file(file_name)
+    local req_body, err = io.get_file(file_name)
     return req_body, err
+end
+
+
+-- get_request_body_table parses the request body according to its Content-Type
+-- and caches the result in ctx._request_body_table for the lifetime of the request.
+-- Supported types: application/json, application/x-www-form-urlencoded,
+-- multipart/form-data.
+--
+-- When content_type is given (e.g. CONTENT_TYPE_JSON), it takes precedence over
+-- the request Content-Type header. A cache hit is only reused when
+-- ctx._request_body_type matches, preventing type confusion between callers.
+local function get_request_body_table(ctx, content_type, max_size)
+    if not ctx then
+        ctx = ngx.ctx.api_ctx
+    end
+    if ctx._request_body_table ~= nil then
+        if content_type and ctx._request_body_type ~= content_type then
+            return nil, "request body type mismatch: cached type is " ..
+                        (ctx._request_body_type or "unknown") ..
+                        ", expected " .. content_type
+        end
+        log.debug("reuse parsed request body from ctx cache")
+        return ctx._request_body_table
+    end
+
+    local ct = content_type or _M.header(ctx, "Content-Type") or ""
+    local result, err, detected_type
+
+    if core_str.find(ct, CONTENT_TYPE_JSON) then
+        local body, body_err = _M.get_body(max_size, ctx)
+        if not body then
+            return nil, "could not get body: " .. (body_err or "request body is empty")
+        end
+        result, err = json.decode(body)
+        if not result then
+            return nil, "could not parse JSON request body: " .. (err or "invalid JSON")
+        end
+        detected_type = CONTENT_TYPE_JSON
+
+    elseif core_str.find(ct, CONTENT_TYPE_FORM_URLENCODED) then
+        result, err = _M.get_post_args()
+        if not result then
+            return nil, "failed to parse form data: " .. (err or "unknown error")
+        end
+        detected_type = CONTENT_TYPE_FORM_URLENCODED
+
+    elseif core_str.find(ct, CONTENT_TYPE_MULTIPART_FORM) then
+        local body, body_err = _M.get_body(max_size, ctx)
+        if not body then
+            return nil, "could not get body: " .. (body_err or "request body is empty")
+        end
+
+        local res = multipart(body, ct)
+        if not res then
+            return nil, "failed to parse multipart form data"
+        end
+        result = res:get_all()
+        detected_type = CONTENT_TYPE_MULTIPART_FORM
+
+    else
+        return nil, "unsupported content-type: " .. ct ..
+                    ", supported types are: " ..
+                    CONTENT_TYPE_JSON .. ", " ..
+                    CONTENT_TYPE_FORM_URLENCODED .. ", " ..
+                    CONTENT_TYPE_MULTIPART_FORM
+    end
+
+    ctx._request_body_table = result
+    ctx._request_body_type = detected_type
+    return result
+end
+_M.get_request_body_table = get_request_body_table
+
+
+function _M.get_json_request_body_table(max_size)
+    local ctx = ngx.ctx.api_ctx
+    local body_tab, err = get_request_body_table(ctx, CONTENT_TYPE_JSON, max_size)
+    if not body_tab then
+        return nil, { message = err }
+    end
+    return body_tab
 end
 
 
@@ -231,8 +466,9 @@ function _M.get_port(ctx)
 end
 
 
-function _M.get_http_version()
-    return ngx.req.http_version()
-end
+_M.get_http_version = ngx.req.http_version
+
+
+_M.get_method = ngx.req.get_method
 
 return _M

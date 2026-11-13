@@ -30,7 +30,7 @@ __DATA__
         content_by_lua_block {
             local plugin = require("apisix.plugins.cors")
             local ok, err = plugin.check_schema({
-                allow_origins = '',
+                allow_origins = 'http://test.com',
                 allow_methods = '',
                 allow_headers = '',
                 expose_headers = '',
@@ -48,8 +48,6 @@ __DATA__
 GET /t
 --- response_body
 done
---- no_error_log
-[error]
 
 
 
@@ -59,7 +57,7 @@ done
         content_by_lua_block {
             local plugin = require("apisix.plugins.cors")
             local ok, err = plugin.check_schema({
-                allow_origins = '',
+                allow_origins = 'http://test.com',
                 allow_methods = '',
                 allow_headers = '',
                 expose_headers = '',
@@ -79,8 +77,6 @@ GET /t
 --- response_body
 property "max_age" validation failed: wrong type: expected integer, got string
 done
---- no_error_log
-[error]
 
 
 
@@ -116,8 +112,6 @@ done
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -159,8 +153,6 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -194,8 +186,6 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -232,8 +222,6 @@ passed
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -247,11 +235,9 @@ Access-Control-Allow-Origin: *
 Vary:
 Access-Control-Allow-Methods: *
 Access-Control-Allow-Headers: *
-Access-Control-Expose-Headers: *
+Access-Control-Expose-Headers:
 Access-Control-Max-Age: 5
-Access-Control-Allow-Credentials: 
---- no_error_log
-[error]
+Access-Control-Allow-Credentials:
 
 
 
@@ -293,8 +279,6 @@ Access-Control-Allow-Credentials:
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -314,8 +298,6 @@ Access-Control-Allow-Headers: headr1,headr2
 Access-Control-Expose-Headers: ex-headr1,ex-headr2
 Access-Control-Max-Age: 50
 Access-Control-Allow-Credentials: true
---- no_error_log
-[error]
 
 
 
@@ -333,8 +315,6 @@ Access-Control-Allow-Headers:
 Access-Control-Expose-Headers:
 Access-Control-Max-Age:
 Access-Control-Allow-Credentials:
---- no_error_log
-[error]
 
 
 
@@ -374,8 +354,6 @@ Access-Control-Allow-Credentials:
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -398,8 +376,6 @@ Access-Control-Allow-Headers: req-header1,req-header2
 Access-Control-Expose-Headers: *
 Access-Control-Max-Age: 5
 Access-Control-Allow-Credentials:
---- no_error_log
-[error]
 
 
 
@@ -419,8 +395,6 @@ Access-Control-Allow-Headers:
 Access-Control-Expose-Headers: *
 Access-Control-Max-Age: 5
 Access-Control-Allow-Credentials:
---- no_error_log
-[error]
 
 
 
@@ -429,12 +403,9 @@ Access-Control-Allow-Credentials:
 OPTIONS /hello HTTP/1.1
 --- response_body
 
---- no_error_log
-[error]
 
 
-
-=== TEST 15: set route(auth plugins faills)
+=== TEST 15: set route(auth plugins fails)
 --- config
     location /t {
         content_by_lua_block {
@@ -471,8 +442,6 @@ OPTIONS /hello HTTP/1.1
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -485,7 +454,7 @@ ExternalHeader1: val
 ExternalHeader2: val
 ExternalHeader3: val
 --- response_body
-{"message":"Missing API key found in request"}
+{"message":"Missing API key in request"}
 --- error_code: 401
 --- response_headers
 Access-Control-Allow-Origin: https://sub.domain.com
@@ -494,8 +463,6 @@ Access-Control-Allow-Headers: *
 Access-Control-Expose-Headers: *
 Access-Control-Max-Age: 5
 Access-Control-Allow-Credentials:
---- no_error_log
-[error]
 
 
 
@@ -536,8 +503,6 @@ Access-Control-Allow-Credentials:
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -550,8 +515,6 @@ Origin: https://sub.domain.com
 /headers
 --- response_headers
 Access-Control-Allow-Origin: https://sub.domain.com
---- no_error_log
-[error]
 
 
 
@@ -564,8 +527,6 @@ Origin: https://sub.domain.com
 /headers
 --- response_headers
 Access-Control-Allow-Methods: GET,POST,PUT,DELETE,PATCH,HEAD,OPTIONS,CONNECT,TRACE
---- no_error_log
-[error]
 
 
 
@@ -578,8 +539,6 @@ Origin: https://sub.domain.com
 /headers
 --- response_headers
 Access-Control-Allow-Headers: request-h
---- no_error_log
-[error]
 
 
 
@@ -592,8 +551,6 @@ Origin: https://sub.domain.com
 /headers
 --- response_headers
 Access-Control-Expose-Headers: expose-h
---- no_error_log
-[error]
 
 
 
@@ -606,8 +563,6 @@ Origin: https://sub.domain.com
 /headers
 --- response_headers
 Access-Control-Max-Age: 5
---- no_error_log
-[error]
 
 
 
@@ -620,8 +575,6 @@ Origin: https://sub.domain.com
 /headers
 --- response_headers
 Access-Control-Allow-Credentials: true
---- no_error_log
-[error]
 
 
 
@@ -654,8 +607,6 @@ GET /t
 --- error_code: 400
 --- response_body eval
 qr/failed to check the configuration of plugin cors err: you can not/
---- no_error_log
-[error]
 
 
 
@@ -688,8 +639,6 @@ GET /t
 --- error_code: 400
 --- response_body eval
 qr/failed to check the configuration of plugin cors err: you can not/
---- no_error_log
-[error]
 
 
 
@@ -722,8 +671,6 @@ GET /t
 --- error_code: 400
 --- response_body eval
 qr/failed to check the configuration of plugin cors err: you can not/
---- no_error_log
-[error]
 
 
 
@@ -756,5 +703,281 @@ GET /t
 --- error_code: 400
 --- response_body eval
 qr/failed to check the configuration of plugin cors err: you can not/
+--- no_error_log
+
+
+
+=== TEST 28: set route (regex specified)
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                    "plugins": {
+                        "cors": {
+                            "allow_origins": "http://sub.domain.com,http://sub2.domain.com",
+                            "allow_methods": "GET,POST",
+                            "allow_headers": "headr1,headr2",
+                            "expose_headers": "ex-headr1,ex-headr2",
+                            "max_age": 50,
+                            "allow_credential": true,
+                            "allow_origins_by_regex":[".*\\.test.com$"]
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uri": "/hello"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 29: regex specified
+--- request
+GET /hello HTTP/1.1
+--- more_headers
+Origin: http://a.test.com
+resp-vary: Via
+--- response_body
+hello world
+--- response_headers
+Access-Control-Allow-Origin: http://a.test.com
+Vary: Via, Origin
+Access-Control-Allow-Methods: GET,POST
+Access-Control-Allow-Headers: headr1,headr2
+Access-Control-Expose-Headers: ex-headr1,ex-headr2
+Access-Control-Max-Age: 50
+Access-Control-Allow-Credentials: true
+
+
+
+=== TEST 30: regex specified not match
+--- request
+GET /hello HTTP/1.1
+--- more_headers
+Origin: http://a.test2.com
+resp-vary: Via
+--- response_body
+hello world
+--- response_headers
+Access-Control-Allow-Origin:
+Access-Control-Allow-Methods:
+Access-Control-Allow-Headers:
+Access-Control-Expose-Headers:
+Access-Control-Max-Age:
+Access-Control-Allow-Credentials:
+
+
+
+=== TEST 31: set route (multiple regex specified )
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                    "plugins": {
+                        "cors": {
+                            "allow_origins": "http://sub.domain.com,http://sub2.domain.com",
+                            "allow_methods": "GET,POST",
+                            "allow_headers": "headr1,headr2",
+                            "expose_headers": "ex-headr1,ex-headr2",
+                            "max_age": 50,
+                            "allow_credential": true,
+                            "allow_origins_by_regex":[".*\\.test.com$",".*\\.example.org$"]
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uri": "/hello"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 32: multiple regex specified match
+--- request
+GET /hello HTTP/1.1
+--- more_headers
+Origin: http://foo.example.org
+resp-vary: Via
+--- response_body
+hello world
+--- response_headers
+Access-Control-Allow-Origin: http://foo.example.org
+Vary: Via, Origin
+Access-Control-Allow-Methods: GET,POST
+Access-Control-Allow-Headers: headr1,headr2
+Access-Control-Expose-Headers: ex-headr1,ex-headr2
+Access-Control-Max-Age: 50
+Access-Control-Allow-Credentials: true
+
+
+
+=== TEST 33: multiple regex specified not match
+--- request
+GET /hello HTTP/1.1
+--- more_headers
+Origin: http://foo.example.com
+resp-vary: Via
+--- response_body
+hello world
+--- response_headers
+Access-Control-Allow-Origin:
+Access-Control-Allow-Methods:
+Access-Control-Allow-Headers:
+Access-Control-Expose-Headers:
+Access-Control-Max-Age:
+Access-Control-Allow-Credentials:
+
+
+
+=== TEST 34: origin was modified by the proxy_rewrite plugin
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                    "plugins": {
+                        "cors": {
+                            "allow_origins": "http://sub.domain.com",
+                            "allow_methods": "GET,POST",
+                            "allow_headers": "headr1,headr2",
+                            "expose_headers": "ex-headr1,ex-headr2",
+                            "max_age": 50,
+                            "allow_credential": true
+                        },
+                        "proxy-rewrite": {
+                            "headers": {
+                                  "Origin": "http://example.com"
+                            }
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uri": "/hello"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 35: origin is not affected by proxy_rewrite plugins
+--- request
+GET /hello HTTP/1.1
+--- more_headers
+Origin: http://sub.domain.com
+resp-vary: Via
+--- response_body
+hello world
+--- response_headers
+Access-Control-Allow-Origin: http://sub.domain.com
+Vary: Via, Origin
+Access-Control-Allow-Methods: GET,POST
+Access-Control-Allow-Headers: headr1,headr2
+Access-Control-Expose-Headers: ex-headr1,ex-headr2
+Access-Control-Max-Age: 50
+Access-Control-Allow-Credentials: true
+
+
+
+=== TEST 36: set route (regex specified)
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                    "plugins": {
+                        "cors": {
+                            "allow_origins": "http://sub.domain.com",
+                            "allow_methods": "GET,POST",
+                            "allow_headers": "headr1,headr2",
+                            "expose_headers": "ex-headr1,ex-headr2",
+                            "allow_credential": true,
+                            "allow_origins_by_regex":[".*\\.test.com$"]
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uri": "/hello"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 37: request without Origin header does not error out
+--- request
+GET /hello HTTP/1.1
+--- response_body
+hello world
+--- response_headers
+Access-Control-Allow-Origin:
+--- error_code: 200
 --- no_error_log
 [error]

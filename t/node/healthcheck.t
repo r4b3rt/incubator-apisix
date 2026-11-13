@@ -17,7 +17,6 @@
 
 use t::APISIX 'no_plan';
 
-master_on();
 repeat_each(1);
 log_level('info');
 no_root_location();
@@ -81,15 +80,22 @@ qr/^.*?\[error\](?!.*process exiting).*/
 --- config
     location /t {
         content_by_lua_block {
-            ngx.sleep(2) -- wait for sync
+            ngx.sleep(3) -- wait for sync
 
             local http = require "resty.http"
+            local httpc = http.new()
             local uri = "http://127.0.0.1:" .. ngx.var.server_port
                         .. "/server_port"
 
+            -- hit route before start test loop
+            local res, err = httpc:request_uri(uri, {method = "GET", keepalive = false})
+            if not res then
+                ngx.say(err)
+                return
+            end
+            ngx.sleep(3)
             local ports_count = {}
             for i = 1, 12 do
-                local httpc = http.new()
                 local res, err = httpc:request_uri(uri, {method = "GET", keepalive = false})
                 if not res then
                     ngx.say(err)
@@ -119,7 +125,7 @@ GET /t
 --- grep_error_log eval
 qr/^.*?\[error\](?!.*process exiting).*/
 --- grep_error_log_out
---- timeout: 6
+--- timeout: 10
 
 
 
@@ -218,10 +224,10 @@ GET /t
 --- response_body
 [{"count":12,"port":"1980"}]
 --- grep_error_log eval
-qr/unhealthy .* for '.*'/
+qr/\([^)]+\) unhealthy TCP increment \([12]\/2\) for '.*'/
 --- grep_error_log_out
-unhealthy TCP increment (1/2) for 'foo.com(127.0.0.1:1970)'
-unhealthy TCP increment (2/2) for 'foo.com(127.0.0.1:1970)'
+(upstream#/apisix/routes/1) unhealthy TCP increment (1/2) for 'foo.com(127.0.0.1:1970)'
+(upstream#/apisix/routes/1) unhealthy TCP increment (2/2) for 'foo.com(127.0.0.1:1970)'
 --- timeout: 10
 
 
@@ -487,8 +493,9 @@ qr{\[error\].*while connecting to upstream.*}
 qr{.*http://127.0.0.1:1960/server_port.*
 .*http://127.0.0.1:1961/server_port.*
 .*http://127.0.0.1:1961/server_port.*
+.*http://127.0.0.1:1960/server_port.*
 .*http://127.0.0.1:1961/server_port.*
-.*http://127.0.0.1:1960/server_port.*}
+.*http://127.0.0.1:1961/server_port.*}
 --- timeout: 10
 
 
@@ -547,8 +554,6 @@ code: 200 body: passed
 delete code: 200
 code: 200 body: passed
 delete code: 200
---- no_error_log
-[error]
 
 
 
@@ -609,7 +614,7 @@ passed
             local httpc = http.new()
             local res, err = httpc:request_uri(uri, {method = "GET", keepalive = false})
 
-            ngx.sleep(2)
+            ngx.sleep(4)
 
             ngx.say(res.status)
         }
@@ -622,6 +627,7 @@ GET /t
 qr/^.*?\[warn\].*/
 --- grep_error_log_out eval
 qr/unhealthy TCP increment.*foo.com/
+--- timeout: 5
 
 
 
@@ -683,7 +689,7 @@ passed
             local httpc = http.new()
             local res, err = httpc:request_uri(uri, {method = "GET", keepalive = false})
 
-            ngx.sleep(2)
+            ngx.sleep(4)
 
             ngx.say(res.status)
         }
@@ -743,7 +749,7 @@ qr/unhealthy TCP increment.*foo.com.*127.0.0.1:1988/
 --- request
 GET /t
 --- response_body_like eval
-qr/expected 0 to be greater than 1/
+qr/expected 0 to be at least 1/
 --- error_code chomp
 400
 
@@ -792,6 +798,120 @@ qr/expected 0 to be greater than 1/
 --- request
 GET /t
 --- response_body_like eval
-qr/expected 65536 to be smaller than 65535/
+qr/expected 65536 to be at most 65535/
 --- error_code chomp
 400
+
+
+
+=== TEST 18: set route + upstream (two upstream node: one healthy + one unhealthy)
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/upstreams/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                    "type": "roundrobin",
+                    "nodes": {
+                        "127.0.0.1:1980": 1,
+                        "127.0.0.1:1970": 1
+                    },
+                    "checks": {
+                        "active": {
+                            "http_path": "/status",
+                            "host": "foo.com",
+                            "healthy": {
+                                "interval": 1,
+                                "successes": 1
+                            },
+                            "unhealthy": {
+                                "interval": 1,
+                                "http_failures": 2
+                            }
+                        }
+                    }
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+                ngx.say(body)
+                return
+            end
+
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                    "uri": "/server_port",
+                    "upstream_id": 1
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+--- grep_error_log eval
+qr/^.*?\[error\](?!.*process exiting).*/
+--- grep_error_log_out
+
+
+
+=== TEST 19: hit routes, ensure the checker is bound to the upstream
+--- config
+    location /t {
+        content_by_lua_block {
+            local http = require "resty.http"
+            local uri = "http://127.0.0.1:" .. ngx.var.server_port
+                        .. "/server_port"
+
+            do
+                local httpc = http.new()
+                local res, err = httpc:request_uri(uri, {method = "GET", keepalive = false})
+            end
+
+            ngx.sleep(2.5)
+
+            local ports_count = {}
+            for i = 1, 12 do
+                local httpc = http.new()
+                local res, err = httpc:request_uri(uri, {method = "GET", keepalive = false})
+                if not res then
+                    ngx.say(err)
+                    return
+                end
+
+                ports_count[res.body] = (ports_count[res.body] or 0) + 1
+            end
+
+            local ports_arr = {}
+            for port, count in pairs(ports_count) do
+                table.insert(ports_arr, {port = port, count = count})
+            end
+
+            local function cmd(a, b)
+                return a.port > b.port
+            end
+            table.sort(ports_arr, cmd)
+
+            ngx.say(require("toolkit.json").encode(ports_arr))
+            ngx.exit(200)
+        }
+    }
+--- request
+GET /t
+--- response_body
+[{"count":12,"port":"1980"}]
+--- grep_error_log eval
+qr/\([^)]+\) unhealthy TCP increment \([12]\/2\) for '.*'/
+--- grep_error_log_out
+(upstream#/apisix/upstreams/1) unhealthy TCP increment (1/2) for 'foo.com(127.0.0.1:1970)'
+(upstream#/apisix/upstreams/1) unhealthy TCP increment (2/2) for 'foo.com(127.0.0.1:1970)'
+--- timeout: 10

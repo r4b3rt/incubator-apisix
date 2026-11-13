@@ -17,352 +17,261 @@
 #
 -->
 
-# Apache APISIX
+# Apache APISIX API Gateway ｜ AI Gateway
 
-[![Build Status](https://github.com/apache/apisix/workflows/build/badge.svg?branch=master)](https://github.com/apache/apisix/actions)
+<img src="./logos/apisix-white-bg.jpg" alt="APISIX logo" height="150px" align="right" />
+
+[![Build Status](https://github.com/apache/apisix/actions/workflows/build.yml/badge.svg?branch=master)](https://github.com/apache/apisix/actions/workflows/build.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/apache/apisix/blob/master/LICENSE)
+[![GitHub release](https://img.shields.io/github/v/release/apache/apisix?color=blue)](https://github.com/apache/apisix/releases)
+[![GitHub stars](https://img.shields.io/github/stars/apache/apisix?style=flat&color=blue)](https://github.com/apache/apisix/stargazers)
+[![Docker Pulls](https://img.shields.io/docker/pulls/apache/apisix?color=blue)](https://hub.docker.com/r/apache/apisix)
+[![Commit activity](https://img.shields.io/github/commit-activity/m/apache/apisix)](https://github.com/apache/apisix/graphs/commit-activity)
+[![GitHub issues](https://img.shields.io/github/issues/apache/apisix)](https://github.com/apache/apisix/issues)
+[![Slack](https://badgen.net/badge/Slack/Join%20Apache%20APISIX?icon=slack)](https://apisix.apache.org/slack)
 
-<p align="center">
-  <a href="https://github.com/apache/apisix">English</a> •
-  <a href="https://github.com/apache/apisix/blob/master/README_CN.md">中文</a>
-</p>
+**Apache APISIX** is a dynamic, real-time, high-performance API Gateway.
 
-<p align="center">
-  <a href="https://apisix.apache.org/">Website</a> •
-  <a href="https://github.com/apache/apisix/tree/master/doc">Docs</a> •
-  <a href="https://github.com/apache/apisix-dashboard">Dashboard</a> •
-  <a href="https://twitter.com/apacheapisix">Twitter</a>
-</p>
+APISIX API Gateway provides rich traffic management features such as load balancing, dynamic upstream, canary release, circuit breaking, authentication, observability, and more. You can use it to handle traditional north-south traffic, as well as east-west traffic between services. It can also be used as a [Kubernetes ingress controller](https://github.com/apache/apisix-ingress-controller).
 
-## What's Apache APISIX?
+## Table of Contents
 
-Apache APISIX is a dynamic, real-time, high-performance API gateway, based on the Nginx library and etcd.
-
-APISIX provides rich traffic management features such as load balancing, dynamic upstream, canary release, circuit breaking, authentication, observability, and more.
-
-You can use Apache APISIX to handle traditional north-south traffic,
-as well as east-west traffic between services.
-It can also be used as a k8s ingress controller.
-
-The technical architecture of Apache APISIX:
-
-![](doc/images/apisix.png)
-
-## Contents
-
-- [Features](#features)
-- [Documentation](#documentation)
+- [Why APISIX](#why-apisix)
+- [AI Gateway](#ai-gateway)
 - [Get Started](#get-started)
+- [Features](#features)
 - [Benchmark](#benchmark)
-- [Apache APISIX vs Kong](#apache-apisix-vs-kong)
 - [Community](#community)
-- [Videos And Articles](#videos-and-articles)
 - [User Stories](#user-stories)
-- [Who Uses APISIX?](#who-uses-apisix)
-- [Landscape](#landscape)
+- [Who Uses APISIX API Gateway?](#who-uses-apisix-api-gateway)
 - [Logos](#logos)
-- [Contributing](#contributing)
 - [Acknowledgments](#acknowledgments)
 - [License](#license)
 
+## Why APISIX
+
+APISIX is built on top of NGINX and etcd. Compared with traditional API gateways, APISIX has dynamic routing and hot-loading of plugins, which is especially suitable for API management under a microservice architecture.
+
+The technical architecture of Apache APISIX:
+
+![Technical architecture of Apache APISIX](docs/assets/images/apisix.png)
+
+## AI Gateway
+
+APISIX can serve as an **[AI Gateway](https://apisix.apache.org/ai-gateway/)** through its flexible plugin system, providing:
+
+- **AI proxying** to route traffic to different LLM providers through a unified interface.
+- **Load balancing, retries, and fallbacks** across multiple LLMs to ensure the efficiency and reliability of AI agents.
+- **Token-based rate limiting** to control cost and protect upstream models.
+- **Robust security** for authentication, authorization, and traffic control on AI workloads.
+
+## Get Started
+
+Install and run APISIX with a single command using the quickstart script (requires [Docker](https://docs.docker.com/get-docker/)):
+
+```shell
+curl -sL https://run.api7.ai/apisix/quickstart | sh
+```
+
+This starts APISIX (listening on port `9080`) together with its etcd configuration store. Verify it is running:
+
+```shell
+curl "http://127.0.0.1:9080" --head | grep Server
+```
+
+Create your first route via the Admin API (port `9180`) to proxy requests to an upstream service:
+
+```shell
+curl -i "http://127.0.0.1:9180/apisix/admin/routes/1" -X PUT -d '
+{
+  "uri": "/get",
+  "upstream": {
+    "type": "roundrobin",
+    "nodes": {
+      "httpbin.org:80": 1
+    }
+  }
+}'
+```
+
+Send a request through APISIX to confirm the route works:
+
+```shell
+curl "http://127.0.0.1:9080/get"
+```
+
+To learn more, follow the [Getting Started](https://apisix.apache.org/docs/apisix/getting-started/) guide and the [installation documentation](https://apisix.apache.org/docs/apisix/installation-guide/) for other deployment methods. To extend APISIX, see the [plugin development guide](docs/en/latest/plugin-develop.md), the [plugin concept](docs/en/latest/terminology/plugin.md), and the [REST Admin API](docs/en/latest/admin-api.md) reference.
+
+For more documents, please refer to the [Apache APISIX Documentation site](https://apisix.apache.org/docs/apisix/getting-started/).
+
 ## Features
 
-You can use Apache APISIX as a traffic entrance to process all business data, including dynamic routing, dynamic upstream, dynamic certificates,
+You can use APISIX API Gateway as a traffic entrance to process all business data, including dynamic routing, dynamic upstream, dynamic certificates,
 A/B testing, canary release, blue-green deployment, limit rate, defense against malicious attacks, metrics, monitoring alarms, service observability, service governance, etc.
 
 - **All platforms**
 
-  - Cloud-Native: Platform agnostic, No vendor lock-in, APISIX can run from bare-metal to Kubernetes.
-  - Run Environment: Both OpenResty and Tengine are supported.
+  - Cloud-Native: Platform agnostic, No vendor lock-in, APISIX API Gateway can run from bare-metal to Kubernetes.
   - Supports ARM64: Don't worry about the lock-in of the infra technology.
 
 - **Multi protocols**
 
-  - [TCP/UDP Proxy](doc/stream-proxy.md): Dynamic TCP/UDP proxy.
-  - [Dynamic MQTT Proxy](doc/plugins/mqtt-proxy.md): Supports to load balance MQTT by `client_id`, both support MQTT [3.1.\*](http://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html), [5.0](https://docs.oasis-open.org/mqtt/mqtt/v5.0/mqtt-v5.0.html).
-  - [gRPC proxy](doc/grpc-proxy.md): Proxying gRPC traffic.
-  - [gRPC transcoding](doc/plugins/grpc-transcode.md): Supports protocol transcoding so that clients can access your gRPC API by using HTTP/JSON.
+  - [TCP/UDP Proxy](docs/en/latest/stream-proxy.md): Dynamic TCP/UDP proxy.
+  - [Dubbo Proxy](docs/en/latest/plugins/dubbo-proxy.md): Dynamic HTTP to Dubbo proxy.
+  - [Dynamic MQTT Proxy](docs/en/latest/plugins/mqtt-proxy.md): Supports to load balance MQTT by `client_id`, both support MQTT [3.1.\*](http://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html), [5.0](https://docs.oasis-open.org/mqtt/mqtt/v5.0/mqtt-v5.0.html).
+  - [gRPC proxy](docs/en/latest/grpc-proxy.md): Proxying gRPC traffic.
+  - [gRPC Web Proxy](docs/en/latest/plugins/grpc-web.md): Proxying gRPC Web traffic to gRPC Service.
+  - [gRPC transcoding](docs/en/latest/plugins/grpc-transcode.md): Supports protocol transcoding so that clients can access your gRPC API by using HTTP/JSON.
   - Proxy Websocket
   - Proxy Protocol
-  - Proxy Dubbo: Dubbo Proxy based on Tengine.
   - HTTP(S) Forward Proxy
-  - [SSL](doc/https.md): Dynamically load an SSL certificate.
+  - [SSL](docs/en/latest/certificate.md): Dynamically load an SSL certificate
+  - [HTTP/3 with QUIC](docs/en/latest/http3.md)
 
-- **Full dynamic**
+- **Full Dynamic**
 
-  - [Hot Updates And Hot Plugins](doc/plugins.md): Continuously updates its configurations and plugins without restarts!
-  - [Proxy Rewrite](doc/plugins/proxy-rewrite.md): Support rewrite the `host`, `uri`, `schema`, `enable_websocket`, `headers` of the request before send to upstream.
-  - [Response Rewrite](doc/plugins/response-rewrite.md): Set customized response status code, body and header to the client.
-  - [Serverless](doc/plugins/serverless.md): Invoke functions in each phase in APISIX.
+  - [Hot Updates And Hot Plugins](docs/en/latest/terminology/plugin.md): Continuously updates its configurations and plugins without restarts!
+  - [Proxy Rewrite](docs/en/latest/plugins/proxy-rewrite.md): Support rewrite the `host`, `uri`, `schema`, `method`, `headers` of the request before send to upstream.
+  - [Response Rewrite](docs/en/latest/plugins/response-rewrite.md): Set customized response status code, body and header to the client.
   - Dynamic Load Balancing: Round-robin load balancing with weight.
   - Hash-based Load Balancing: Load balance with consistent hashing sessions.
-  - [Health Checks](doc/health-check.md): Enable health check on the upstream node, and will automatically filter unhealthy nodes during load balancing to ensure system stability.
+  - [Health Checks](docs/en/latest/tutorials/health-check.md): Enable health check on the upstream node and will automatically filter unhealthy nodes during load balancing to ensure system stability.
   - Circuit-Breaker: Intelligent tracking of unhealthy upstream services.
-  - [Proxy Mirror](doc/plugins/proxy-mirror.md): Provides the ability to mirror client requests.
-  - [Traffic Split](doc/plugins/traffic-split.md): Allows users to incrementally direct percentages of traffic between various upstreams.
+  - [Proxy Mirror](docs/en/latest/plugins/proxy-mirror.md): Provides the ability to mirror client requests.
+  - [Traffic Split](docs/en/latest/plugins/traffic-split.md): Allows users to incrementally direct percentages of traffic between various upstreams.
 
 - **Fine-grained routing**
 
-  - [Supports full path matching and prefix matching](doc/router-radixtree.md#how-to-use-libradixtree-in-apisix)
-  - [Support all Nginx built-in variables as conditions for routing](/doc/router-radixtree.md#how-to-filter-route-by-nginx-builtin-variable), so you can use `cookie`, `args`, etc. as routing conditions to implement canary release, A/B testing, etc.
+  - [Supports full path matching and prefix matching](docs/en/latest/router-radixtree.md#how-to-use-libradixtree-in-apisix)
+  - [Support all Nginx built-in variables as conditions for routing](docs/en/latest/router-radixtree.md#how-to-filter-route-by-nginx-builtin-variable), so you can use `cookie`, `args`, etc. as routing conditions to implement canary release, A/B testing, etc.
   - Support [various operators as judgment conditions for routing](https://github.com/iresty/lua-resty-radixtree#operator-list), for example `{"arg_age", ">", 24}`
   - Support [custom route matching function](https://github.com/iresty/lua-resty-radixtree/blob/master/t/filter-fun.t#L10)
-  - IPv6: Use IPv6 to match route.
-  - Support [TTL](doc/admin-api.md#route)
-  - [Support priority](doc/router-radixtree.md#3-match-priority)
-  - [Support Batch Http Requests](doc/plugins/batch-requests.md)
+  - IPv6: Use IPv6 to match the route.
+  - Support [TTL](docs/en/latest/admin-api.md#route)
+  - [Support priority](docs/en/latest/router-radixtree.md#3-match-priority)
+  - [Support Batch Http Requests](docs/en/latest/plugins/batch-requests.md)
+  - [Support filtering route by GraphQL attributes](docs/en/latest/router-radixtree.md#how-to-filter-route-by-graphql-attributes)
 
 - **Security**
 
-  - Authentications: [key-auth](doc/plugins/key-auth.md), [JWT](doc/plugins/jwt-auth.md), [basic-auth](doc/plugins/basic-auth.md), [wolf-rbac](doc/plugins/wolf-rbac.md)
-  - [IP Whitelist/Blacklist](doc/plugins/ip-restriction.md)
-  - [Referer Whitelist/Blacklist](doc/plugins/referer-restriction.md)
-  - [IdP](doc/plugins/openid-connect.md): Support external authentication services, such as Auth0, okta, etc., users can use this to connect to OAuth 2.0 and other authentication methods.
-  - [Limit-req](doc/plugins/limit-req.md)
-  - [Limit-count](doc/plugins/limit-count.md)
-  - [Limit-concurrency](doc/plugins/limit-conn.md)
+  - Rich authentication & authorization support:
+    * [key-auth](docs/en/latest/plugins/key-auth.md)
+    * [JWT](docs/en/latest/plugins/jwt-auth.md)
+    * [basic-auth](docs/en/latest/plugins/basic-auth.md)
+    * [wolf-rbac](docs/en/latest/plugins/wolf-rbac.md)
+    * [casbin](docs/en/latest/plugins/authz-casbin.md)
+    * [keycloak](docs/en/latest/plugins/authz-keycloak.md)
+    * [casdoor](docs/en/latest/plugins/authz-casdoor.md)
+  - [IP Whitelist/Blacklist](docs/en/latest/plugins/ip-restriction.md)
+  - [Referer Whitelist/Blacklist](docs/en/latest/plugins/referer-restriction.md)
+  - [IdP](docs/en/latest/plugins/openid-connect.md): Support external Identity platforms, such as Auth0, okta, etc..
+  - [Limit-req](docs/en/latest/plugins/limit-req.md)
+  - [Limit-count](docs/en/latest/plugins/limit-count.md)
+  - [Limit-concurrency](docs/en/latest/plugins/limit-conn.md)
   - Anti-ReDoS(Regular expression Denial of Service): Built-in policies to Anti ReDoS without configuration.
-  - [CORS](doc/plugins/cors.md) Enable CORS(Cross-origin resource sharing) for your API.
-  - [URI Blocker](doc/plugins/uri-blocker.md): Block client request by URI.
-  - [Request Validator](doc/plugins/request-validation.md)
+  - [CORS](docs/en/latest/plugins/cors.md) Enable CORS(Cross-origin resource sharing) for your API.
+  - [URI Blocker](docs/en/latest/plugins/uri-blocker.md): Block client request by URI.
+  - [Request Validator](docs/en/latest/plugins/request-validation.md)
+  - [CSRF](docs/en/latest/plugins/csrf.md) Based on the [`Double Submit Cookie`](https://en.wikipedia.org/wiki/Cross-site_request_forgery#Double_Submit_Cookie) way, protect your API from CSRF attacks.
 
 - **OPS friendly**
 
-  - OpenTracing: support [Apache Skywalking](doc/plugins/skywalking.md) and [Zipkin](doc/plugins/zipkin.md)
-  - works with external service discovery：In addition to the built-in etcd, it also supports `Consul` and `Nacos` [DNS discovery mode](https://github.com/apache/apisix/issues/1731#issuecomment-646392129), and [Eureka](doc/discovery.md)
-  - Monitoring And Metrics: [Prometheus](doc/plugins/prometheus.md)
-  - Clustering: APISIX nodes are stateless, creates clustering of the configuration center, please refer to [etcd Clustering Guide](https://github.com/etcd-io/etcd/blob/master/Documentation/op-guide/clustering.md).
-  - High availability: support to configure multiple etcd addresses in the same cluster.
+  - Zipkin tracing: [Zipkin](docs/en/latest/plugins/zipkin.md)
+  - Open source APM: support [Apache SkyWalking](docs/en/latest/plugins/skywalking.md)
+  - Works with external service discovery: In addition to the built-in etcd, it also supports [Consul](docs/en/latest/discovery/consul.md), [Consul_kv](docs/en/latest/discovery/consul_kv.md), [Nacos](docs/en/latest/discovery/nacos.md), [Eureka](docs/en/latest/discovery/eureka.md) and [Zookeeper (CP)](https://github.com/api7/apisix-seed/blob/main/docs/en/latest/zookeeper.md).
+  - Monitoring And Metrics: [Prometheus](docs/en/latest/plugins/prometheus.md)
+  - Clustering: APISIX nodes are stateless, creates clustering of the configuration center, please refer to [etcd Clustering Guide](https://etcd.io/docs/v3.5/op-guide/clustering/).
+  - High availability: Support to configure multiple etcd addresses in the same cluster.
   - [Dashboard](https://github.com/apache/apisix-dashboard)
   - Version Control: Supports rollbacks of operations.
   - CLI: start\stop\reload APISIX through the command line.
-  - [Stand-alone mode](doc/stand-alone.md): Supports to load route rules from local yaml file, it is more friendly such as under the kubernetes(k8s).
-  - [Global Rule](doc/architecture-design.md#Global-Rule): Allows to run any plugin for all request, eg: limit rate, IP filter etc.
-  - High performance: The single-core QPS reaches 18k with an average delay of less than 0.2 milliseconds.
-  - [Fault Injection](doc/plugins/fault-injection.md)
-  - [REST Admin API](doc/admin-api.md): Using the REST Admin API to control Apache APISIX, which only allows 127.0.0.1 access by default, you can modify the `allow_admin` field in `conf/config.yaml` to specify a list of IPs that are allowed to call the Admin API. Also note that the Admin API uses key auth to verify the identity of the caller. **The `admin_key` field in `conf/config.yaml` needs to be modified before deployment to ensure security**.
-  - External Loggers: Export access logs to external log management tools. ([HTTP Logger](doc/plugins/http-logger.md), [TCP Logger](doc/plugins/tcp-logger.md), [Kafka Logger](doc/plugins/kafka-logger.md), [UDP Logger](doc/plugins/udp-logger.md))
+  - [Standalone](docs/en/latest/deployment-modes.md#standalone): Supports to load route rules from local YAML file, it is more friendly such as under the kubernetes(k8s).
+  - [Global Rule](docs/en/latest/terminology/global-rule.md): Allows to run any plugin for all request, eg: limit rate, IP filter etc.
+  - High performance: The single-core QPS reaches 18k with an average delay of fewer than 0.2 milliseconds.
+  - [Fault Injection](docs/en/latest/plugins/fault-injection.md)
+  - [REST Admin API](docs/en/latest/admin-api.md): Using the REST Admin API to control Apache APISIX, which only allows 127.0.0.1 access by default, you can modify the `allow_admin` field in `conf/config.yaml` to specify a list of IPs that are allowed to call the Admin API. Also, note that the Admin API uses key auth to verify the identity of the caller.
+  - External Loggers: Export access logs to external log management tools. ([HTTP Logger](docs/en/latest/plugins/http-logger.md), [TCP Logger](docs/en/latest/plugins/tcp-logger.md), [Kafka Logger](docs/en/latest/plugins/kafka-logger.md), [UDP Logger](docs/en/latest/plugins/udp-logger.md), [RocketMQ Logger](docs/en/latest/plugins/rocketmq-logger.md), [SkyWalking Logger](docs/en/latest/plugins/skywalking-logger.md), [Alibaba Cloud Logging(SLS)](docs/en/latest/plugins/sls-logger.md), [Google Cloud Logging](docs/en/latest/plugins/google-cloud-logging.md), [Splunk HEC Logging](docs/en/latest/plugins/splunk-hec-logging.md), [File Logger](docs/en/latest/plugins/file-logger.md), [SolarWinds Loggly Logging](docs/en/latest/plugins/loggly.md), [TencentCloud CLS](docs/en/latest/plugins/tencent-cloud-cls.md)).
+  - [ClickHouse](docs/en/latest/plugins/clickhouse-logger.md): push logs to ClickHouse.
+  - [Elasticsearch](docs/en/latest/plugins/elasticsearch-logger.md): push logs to Elasticsearch.
+  - [Datadog](docs/en/latest/plugins/datadog.md): push custom metrics to the DogStatsD server, comes bundled with [Datadog agent](https://docs.datadoghq.com/agent/), over the UDP protocol. DogStatsD basically is an implementation of StatsD protocol which collects the custom metrics for Apache APISIX agent, aggregates it into a single data point and sends it to the configured Datadog server.
+  - [Helm charts](https://github.com/apache/apisix-helm-chart)
+  - [HashiCorp Vault](https://www.vaultproject.io/): Support secret management solution for accessing secrets from Vault secure storage backed in a low trust environment. Currently, RS256 keys (public-private key pairs) or secret keys can be linked from vault in jwt-auth authentication plugin using [APISIX Secret](docs/en/latest/terminology/secret.md) resource.
 
 - **Highly scalable**
-  - [Custom plugins](doc/plugin-develop.md): Allows hooking of common phases, such as `rewrite`, `access`, `header filer`, `body filter` and `log`, also allows to hook the `balancer` stage.
+  - [Custom plugins](docs/en/latest/plugin-develop.md): Allows hooking of common phases, such as `rewrite`, `access`, `header filter`, `body filter` and `log`, also allows to hook the `balancer` stage.
+  - [Plugin can be written in Java/Go/Python](docs/en/latest/external-plugin.md)
+  - [Plugin can be written with Proxy Wasm SDK](docs/en/latest/wasm.md)
   - Custom load balancing algorithms: You can use custom load balancing algorithms during the `balancer` phase.
   - Custom routing: Support users to implement routing algorithms themselves.
 
-## Documentation
+- **Multi-Language support**
+  - Apache APISIX is a multi-language gateway for plugin development and provides support via `RPC` and `Wasm`.
+  ![Multi Language Support into Apache APISIX](docs/assets/images/external-plugin.png)
+  - The RPC way, is the current way. Developers can choose the language according to their needs and after starting an independent process with the RPC, it exchanges data with APISIX through local RPC communication. Till this moment, APISIX has support for [Java](https://github.com/apache/apisix-java-plugin-runner), [Golang](https://github.com/apache/apisix-go-plugin-runner), [Python](https://github.com/apache/apisix-python-plugin-runner) and Node.js.
+  - The Wasm or WebAssembly, is an experimental way. APISIX can load and run Wasm bytecode via APISIX [wasm plugin](https://github.com/apache/apisix/blob/master/docs/en/latest/wasm.md) written with the [Proxy Wasm SDK](https://github.com/proxy-wasm/spec#sdks). Developers only need to write the code according to the SDK and then compile it into a Wasm bytecode that runs on Wasm VM with APISIX.
 
-[Document Indexing for Apache APISIX](doc/README.md)
-
-## Get Started
-
-### Configure and Installation
-
-APISIX Installed and tested in the following systems:
-
-CentOS 7, Ubuntu 16.04, Ubuntu 18.04, Debian 9, Debian 10, macOS, **ARM64** Ubuntu 18.04
-
-There are several ways to install the Apache Release version of APISIX:
-
-1. Source code compilation (applicable to all systems)
-   - Installation runtime dependencies: OpenResty and etcd, and compilation dependencies: luarocks. Refer to [install dependencies documentation](doc/install-dependencies.md)
-   - Download the latest source code release package:
-
-     ```shell
-     $ mkdir apisix-2.1
-     $ wget https://downloads.apache.org/apisix/2.1/apache-apisix-2.1-src.tgz
-     $ tar zxvf apache-apisix-2.1-src.tgz -C apisix-2.1
-     ```
-
-   - Install the dependencies：
-
-     ```shell
-     $ make deps
-     ```
-
-   - check version of APISIX:
-
-     ```shell
-     $ ./bin/apisix version
-     ```
-
-   - start APISIX:
-
-     ```shell
-     $ ./bin/apisix start
-     ```
-
-2. [Docker image](https://hub.docker.com/r/apache/apisix) （applicable to all systems）
-
-   By default, the latest Apache release package will be pulled:
-
-   ```shell
-   $ docker pull apache/apisix
-   ```
-
-   The Docker image does not include `etcd`, you can refer to [docker compose example](https://github.com/apache/apisix-docker/tree/master/example) to start a test cluster.
-
-3. RPM package（only for CentOS 7）
-   - Installation runtime dependencies: OpenResty and etcd, refer to [install dependencies documentation](doc/install-dependencies.md#centos-7)
-   - install APISIX：
-
-   ```shell
-   $ sudo yum install -y https://github.com/apache/apisix/releases/download/2.1/apisix-2.1-0.el7.noarch.rpm
-   ```
-
-   - check version of APISIX:
-
-     ```shell
-     $ apisix version
-     ```
-
-   - start APISIX:
-
-     ```shell
-     $ apisix start
-     ```
-
-**Note**: Apache APISIX would not support the v2 protocol of etcd anymore since APISIX v2.0, and the minimum etcd version supported is v3.4.0. Please update etcd when needed. If you need to migrate your data from etcd v2 to v3, please follow [etcd migration guide](https://etcd.io/docs/v3.4.0/op-guide/v2-migration/).
-
-### For Developer
-
-1. For developers, you can use the latest master branch to experience more features
-
-   - build from source code
-
-   ```shell
-   $ git clone git@github.com:apache/apisix.git
-   $ cd apisix
-   $ make deps
-   ```
-
-   - Docker image
-
-   ```shell
-   $ git clone https://github.com/apache/apisix-docker.git
-   $ cd apisix-docker
-   $ sudo docker build -f alpine-dev/Dockerfile .
-   ```
-
-2. Getting start
-
-   The getting started guide is a great way to learn the basics of APISIX, just follow the steps in [Getting Started](doc/getting-started.md).
-
-   Further, you can follow the documentation to try more [plugins](doc/README.md#Plugins).
-
-3. Admin API
-
-   Apache APISIX provides [REST Admin API](doc/admin-api.md) to dynamic control the Apache APISIX cluster.
-
-4. Plugin development
-
-   You can refer to [plugin development guide](doc/plugin-develop.md), and [sample plugin `echo`](doc/plugins/echo.md) documentation and code implementation.
-
-   Please note that Apache APISIX plugins' added, updated, deleted, etc. are hot loaded, without restarting the service.
-
-For more documents, please refer to [Apache APISIX Document Index](doc/README.md)
+- **Serverless**
+  - [Lua functions](docs/en/latest/plugins/serverless.md): Invoke functions in each phase in APISIX.
+  - [AWS Lambda](docs/en/latest/plugins/aws-lambda.md): Integration with AWS Lambda function as a dynamic upstream to proxy all requests for a particular URI to the AWS API gateway endpoint. Supports authorization via api key and AWS IAM access secret.
+  - [Azure Functions](docs/en/latest/plugins/azure-functions.md): Seamless integration with Azure Serverless Function as a dynamic upstream to proxy all requests for a particular URI to the Microsoft Azure cloud.
+  - [Apache OpenWhisk](docs/en/latest/plugins/openwhisk.md): Seamless integration with Apache OpenWhisk as a dynamic upstream to proxy all requests for a particular URI to your own OpenWhisk cluster.
 
 ## Benchmark
 
-Using AWS's 8 core server, APISIX's QPS reach to 140,000 with a latency of only 0.2 ms.
+Using AWS's eight-core server, APISIX's QPS reaches 140,000 with a latency of only 0.2 ms.
 
-[benckmark script](benchmark/run.sh), [test method and process](https://gist.github.com/membphis/137db97a4bf64d3653aa42f3e016bd01) has been open source, welcome to try and contribute.
+[Benchmark script](benchmark/run.sh) has been open sourced, welcome to try and contribute.
 
-## Apache APISIX vs Kong
-
-#### Both of them have been covered core features of API gateway
-
-| **Features**         | **Apache APISIX** | **KONG** |
-| :------------------- | :---------------- | :------- |
-| **Dynamic upstream** | Yes               | Yes      |
-| **Dynamic router**   | Yes               | Yes      |
-| **Health check**     | Yes               | Yes      |
-| **Dynamic SSL**      | Yes               | Yes      |
-| **L4 and L7 proxy**  | Yes               | Yes      |
-| **Opentracing**      | Yes               | Yes      |
-| **Custom plugin**    | Yes               | Yes      |
-| **REST API**         | Yes               | Yes      |
-| **CLI**              | Yes               | Yes      |
-
-#### The advantages of Apache APISIX
-
-| **Features**                                                    | **Apache APISIX**                                 | **Kong**                |
-| :-------------------------------------------------------------- | :------------------------------------------------ | :---------------------- |
-| Belongs to                                                      | Apache Software Foundation                        | Kong Inc.               |
-| Tech Architecture                                               | Nginx + etcd                                      | Nginx + postgres        |
-| Communication channels                                          | Mail list, Wechat group, QQ group, GitHub, meetup | GitHub, freenode, forum |
-| Single-core CPU, QPS(enable limit-count and prometheus plugins) | 18000                                             | 1700                    |
-| Latency                                                         | 0.2 ms                                            | 2 ms                    |
-| Dubbo                                                           | Yes                                               | No                      |
-| Configuration rollback                                          | Yes                                               | No                      |
-| Route with TTL                                                  | Yes                                               | No                      |
-| Plug-in hot loading                                             | Yes                                               | No                      |
-| Custom LB and route                                             | Yes                                               | No                      |
-| REST API <--> gRPC transcoding                                  | Yes                                               | No                      |
-| Tengine                                                         | Yes                                               | No                      |
-| MQTT                                                            | Yes                                               | No                      |
-| Configuration effective time                                    | Event driven, < 1ms                               | polling, 5 seconds      |
-| Dashboard                                                       | Yes                                               | No                      |
-| IdP                                                             | Yes                                               | No                      |
-| Configuration Center HA                                         | Yes                                               | No                      |
-| Speed limit for a specified time window                         | Yes                                               | No                      |
-| Support any Nginx variable as routing condition                 | Yes                                               | No                      |
-
-Benchmark comparison test [details data](https://gist.github.com/membphis/137db97a4bf64d3653aa42f3e016bd01)
+[APISIX also works perfectly in AWS graviton3 C7g.](https://apisix.apache.org/blog/2022/06/07/installation-performance-test-of-apigateway-apisix-on-aws-graviton3)
 
 ## Community
 
-- Mailing List: Mail to dev-subscribe@apisix.apache.org, follow the reply to subscribe the mailing list.
-- QQ Group - 578997126, 552030619
-- [Slack Workspace](http://s.apache.org/slack-invite) - join `#apisix` on our Slack to meet the team and ask questions
+- [Kindly Write a Review](https://www.g2.com/products/apache-apisix/reviews) for APISIX in G2.
+- Mailing List: Mail to dev-subscribe@apisix.apache.org, follow the reply to subscribe to the mailing list.
+- Slack Workspace - [invitation link](https://apisix.apache.org/slack) (Please open an [issue](https://apisix.apache.org/docs/general/submit-issue) if this link is expired), and then join the #apisix channel (Channels -> Browse channels -> search for "apisix").
 - ![Twitter Follow](https://img.shields.io/twitter/follow/ApacheAPISIX?style=social) - follow and interact with us using hashtag `#ApacheAPISIX`
-- [bilibili video](https://space.bilibili.com/551921247)
-
-### Contributor Over Time
-
-![contributor-over-time](./doc/images/contributor-over-time.png)
-
-## Videos And Articles
-
-- [Apache APISIX: How to implement plugin orchestration in API Gateway](https://www.youtube.com/watch?v=iEegNXOtEhQ)
-- [Improve Apache APISIX observability with Apache Skywalking](https://www.youtube.com/watch?v=DleVJwPs4i4)
-- [APISIX technology selection, testing and continuous integration](https://medium.com/@ming_wen/apache-apisixs-technology-selection-testing-and-continuous-integration-313221b02542)
-- [Analysis of Excellent Performance of Apache APISIX Microservices Gateway](https://medium.com/@ming_wen/analysis-of-excellent-performance-of-apache-apisix-microservices-gateway-fc77db4090b5)
+- [Documentation](https://apisix.apache.org/docs/)
+- [Discussions](https://github.com/apache/apisix/discussions)
+- [Blog](https://apisix.apache.org/blog)
 
 ## User Stories
 
-- [European Factory Platform: API Security Gateway – Using APISIX in the eFactory Platform](https://www.efactory-project.eu/post/api-security-gateway-using-apisix-in-the-efactory-platform)
-- [ke.com: How to Build a Gateway Based on Apache APISIX(Chinese)](https://mp.weixin.qq.com/s/yZl9MWPyF1-gOyCp8plflA)
-- [360: Apache APISIX Practice in OPS Platform(Chinese)](https://mp.weixin.qq.com/s/zHF_vlMaPOSoiNvqw60tVw)
-- [HelloTalk: Exploring Globalization Based on OpenResty and Apache APISIX(Chinese)](https://www.upyun.com/opentalk/447.html)
-- [Tencent Cloud: Why choose Apache APISIX to implement the k8s ingress controller?(Chinese)](https://www.upyun.com/opentalk/448.html)
-- [aispeech: Why we create a new k8s ingress controller?(Chinese)](https://mp.weixin.qq.com/s/bmm2ibk2V7-XYneLo9XAPQ)
+- [European eFactory Platform: API Security Gateway – Using APISIX in the eFactory Platform](https://web.archive.org/web/20220120184502/https://www.efpf.org/post/api-security-gateway-using-apisix-in-the-efactory-platform)
+- [Copernicus Reference System Software](https://github.com/COPRS/infrastructure/wiki/Networking-trade-off)
+- [More Stories](https://apisix.apache.org/blog/tags/case-studies/)
 
-## Who Uses APISIX?
+## Who Uses APISIX API Gateway?
 
-A wide variety of companies and organizations use APISIX for research, production and commercial product, including:
+A wide variety of companies and organizations use APISIX API Gateway for research, production and commercial product, below are some of them:
 
-<img src="https://raw.githubusercontent.com/api7/website-of-API7/master/user-wall.jpg" width="900" height="500">
-
-Users are encouraged to add themselves to the [Powered By](doc/powered-by.md) page.
-
-## Landscape
-
-<p align="left">
-<img src="https://landscape.cncf.io/images/left-logo.svg" width="150">&nbsp;&nbsp;<img src="https://landscape.cncf.io/images/right-logo.svg" width="200">
-<br><br>
-APISIX enriches the <a href="https://landscape.cncf.io/category=api-gateway&format=card-mode&grouping=category">
-CNCF API Gateway Landscape.</a>
-</p>
+- Airwallex
+- Bilibili
+- CVTE
+- European eFactory Platform
+- European Copernicus Reference System
+- Geely
+- HONOR
+- Horizon Robotics
+- iQIYI
+- Lenovo
+- NASA JPL
+- Nayuki
+- OPPO
+- QingCloud
+- Swisscom
+- Tencent Game
+- Travelsky
+- vivo
+- Sina Weibo
+- WeCity
+- WPS
+- XPENG
+- Zoom
 
 ## Logos
 
-- [Apache APISIX logo(PNG)](logos/apache-apisix.png)
+- [Apache APISIX logo(PNG)](https://github.com/apache/apisix/tree/master/logos/apache-apisix.png)
 - [Apache APISIX logo source](https://apache.org/logos/#apisix)
-
-## Contributing
-
-We welcome all kinds of contributions from the open-source community, individuals and partners.
-
-- [Contributing Guide](CONTRIBUTING.md)
 
 ## Acknowledgments
 
@@ -370,4 +279,4 @@ Inspired by Kong and Orange.
 
 ## License
 
-[Apache 2.0 License](LICENSE)
+[Apache 2.0 License](https://github.com/apache/apisix/tree/master/LICENSE)

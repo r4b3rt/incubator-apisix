@@ -14,15 +14,17 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 --
-local sw_tracer = require("skywalking.tracer")
+local require = require
 local core = require("apisix.core")
+local plugin = require("apisix.plugin")
 local process = require("ngx.process")
+local sw_tracer = require("skywalking.tracer")
+local Span = require("skywalking.span")
 local ngx = ngx
 local math = math
-local require = require
 
 local plugin_name = "skywalking"
-local metadata_schema = {
+local attr_schema = {
     type = "object",
     properties = {
         service_name = {
@@ -39,8 +41,10 @@ local metadata_schema = {
             type = "string",
             default = "http://127.0.0.1:12800",
         },
+        report_interval = {
+            type = "integer",
+        },
     },
-    additionalProperties = false,
 }
 
 local schema = {
@@ -53,20 +57,22 @@ local schema = {
             default = 1
         }
     },
-    additionalProperties = false,
 }
 
 
 local _M = {
     version = 0.1,
-    priority = -1100, -- last running plugin, but before serverless post func
+    priority = 12010,
     name = plugin_name,
     schema = schema,
-    metadata_schema = metadata_schema,
+    attr_schema = attr_schema,
+    run_policy = "prefer_route",
 }
 
 
 function _M.check_schema(conf)
+    local check = {"endpoint_addr"}
+    core.utils.check_https(check, conf, plugin_name)
     return core.schema.check(schema, conf)
 end
 
@@ -85,33 +91,46 @@ function _M.rewrite(conf, ctx)
 end
 
 
-function _M.body_filter(conf, ctx)
+function _M.delayed_body_filter(conf, ctx)
     if ctx.skywalking_sample and ngx.arg[2] then
+        Span.setComponentId(ngx.ctx.exitSpan, 6002)
+        Span.setComponentId(ngx.ctx.entrySpan, 6002)
         sw_tracer:finish()
         core.log.info("tracer finish")
     end
 end
 
 
+local started_skywalking_reporter = false
 function _M.log(conf, ctx)
-    if ctx.skywalking_sample then
-        sw_tracer:prepareForReport()
-        core.log.info("tracer prepare for report")
+    if not ctx.skywalking_sample then
+        return
     end
+
+    if not started_skywalking_reporter then
+        started_skywalking_reporter = true
+
+        local sk_cli = require("skywalking.client")
+
+        local plugin_info = _M.plugin_info
+        if plugin_info.report_interval then
+            sk_cli.backendTimerDelay = plugin_info.report_interval
+        end
+        sk_cli:startBackendTimer(plugin_info.endpoint_addr)
+    end
+
+    sw_tracer:prepareForReport()
+    core.log.info("tracer prepare for report")
 end
 
 
 function _M.init()
-    if process.type() ~= "worker" and process.type() ~= "single" then
+    if process.type() ~= "worker" then
         return
     end
-
-    local local_conf = core.config.local_conf()
-    local local_plugin_info = core.table.try_read_attr(local_conf,
-                                                       "plugin_attr",
-                                                       plugin_name) or {}
-    local_plugin_info = core.table.clone(local_plugin_info)
-    local ok, err = core.schema.check(metadata_schema, local_plugin_info)
+    local local_plugin_info = plugin.plugin_attr(plugin_name)
+    local_plugin_info = local_plugin_info and core.table.clone(local_plugin_info) or {}
+    local ok, err = core.schema.check(attr_schema, local_plugin_info)
     if not ok then
         core.log.error("failed to check the plugin_attr[", plugin_name, "]",
                        ": ", err)
@@ -122,13 +141,16 @@ function _M.init()
                   core.json.delay_encode(local_plugin_info))
 
     -- TODO: maybe need to fetch them from plugin-metadata
+    if local_plugin_info.service_instance_name == "$hostname" then
+        local_plugin_info.service_instance_name = core.utils.gethostname()
+    end
+
+    _M.plugin_info = local_plugin_info
+
     local metadata_shdict = ngx.shared.tracing_buffer
+
     metadata_shdict:set('serviceName', local_plugin_info.service_name)
     metadata_shdict:set('serviceInstanceName', local_plugin_info.service_instance_name)
-
-    local sk_cli = require("skywalking.client")
-    sk_cli:startBackendTimer(local_plugin_info.endpoint_addr)
 end
-
 
 return _M

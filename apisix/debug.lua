@@ -15,15 +15,16 @@
 -- limitations under the License.
 --
 local require      = require
-local yaml         = require("tinyyaml")
+local yaml         = require("lyaml")
 local log          = require("apisix.core.log")
-local json         = require("apisix.core.json")
 local profile      = require("apisix.core.profile")
-local process      = require("ngx.process")
 local lfs          = require("lfs")
+local inspect      = require("inspect")
+local jsonschema   = require("jsonschema")
 local io           = io
 local ngx          = ngx
 local re_find      = ngx.re.find
+local get_headers  = ngx.req.get_headers
 local type         = type
 local pairs        = pairs
 local setmetatable = setmetatable
@@ -36,6 +37,51 @@ local debug_yaml_ctime
 
 
 local _M = {version = 0.1}
+
+
+local config_schema = {
+    type = "object",
+    properties = {
+        basic = {
+            properties = {
+                enable = {
+                    type = "boolean",
+                },
+            }
+        },
+        http_filter = {
+            properties = {
+                enable = {
+                    type = "boolean",
+                },
+                enable_header_name = {
+                    type = "string",
+                },
+            }
+        },
+        hook_conf = {
+            properties = {
+                enable = {
+                    type = "boolean",
+                },
+                name = {
+                    type = "string",
+                },
+                log_level = {
+                    enum = {"debug", "info", "notice", "warn", "error",
+                            "crit", "alert","emerg"},
+                },
+                is_print_input_args = {
+                    type = "boolean",
+                },
+                is_print_return_value = {
+                    type = "boolean",
+                },
+            }
+        },
+    },
+    required = {"basic", "http_filter", "hook_conf"},
+}
 
 
 local function read_debug_yaml()
@@ -84,7 +130,7 @@ local function read_debug_yaml()
     local yaml_config = f:read("*a")
     f:close()
 
-    local debug_yaml_new = yaml.parse(yaml_config)
+    local debug_yaml_new = yaml.load(yaml_config)
     if not debug_yaml_new then
         log.error("failed to parse the content of file " .. debug_yaml_path)
         return
@@ -93,6 +139,16 @@ local function read_debug_yaml()
     debug_yaml_new.hooks = debug_yaml_new.hooks or {}
     debug_yaml = debug_yaml_new
     debug_yaml_ctime = last_change_time
+
+    -- validate the debug yaml config
+    local validator = jsonschema.generate_validator(config_schema)
+    local ok, err = validator(debug_yaml)
+    if not ok then
+        log.error("failed to validate debug config " .. err)
+        return
+    end
+
+    return true
 end
 
 
@@ -101,7 +157,7 @@ do
     local pre_mtime
     local enabled_hooks = {}
 
-local function apple_new_fun(module, fun_name, file_path, hook_conf)
+local function apply_new_fun(module, fun_name, file_path, hook_conf)
     local log_level = hook_conf.log_level or "warn"
 
     if not module or type(module[fun_name]) ~= "function" then
@@ -124,15 +180,24 @@ local function apple_new_fun(module, fun_name, file_path, hook_conf)
 
     function mt.__call(self, ...)
         local arg = {...}
+        local http_filter = debug_yaml.http_filter
+        local api_ctx = ngx.ctx.api_ctx
+        local enable_by_hook = not (http_filter and http_filter.enable)
+        local enable_by_header_filter = (http_filter and http_filter.enable)
+                and (api_ctx and api_ctx.enable_dynamic_debug)
         if hook_conf.is_print_input_args then
-            log[log_level]("call require(\"", file_path, "\").", fun_name,
-                           "() args:", json.delay_encode(arg, true))
+            if enable_by_hook or enable_by_header_filter then
+                log[log_level]("call require(\"", file_path, "\").", fun_name,
+                               "() args:", inspect(arg))
+            end
         end
 
         local ret = {self.fun_org(...)}
         if hook_conf.is_print_return_value then
-            log[log_level]("call require(\"", file_path, "\").", fun_name,
-                           "() return:", json.delay_encode(ret, true))
+            if enable_by_hook or enable_by_header_filter then
+                log[log_level]("call require(\"", file_path, "\").", fun_name,
+                               "() return:", inspect(ret))
+            end
         end
         return unpack(ret)
     end
@@ -179,7 +244,7 @@ function sync_debug_hooks()
 
         else
             for _, fun_name in ipairs(fun_names) do
-                apple_new_fun(module, fun_name, file_path, hook_conf)
+                apply_new_fun(module, fun_name, file_path, hook_conf)
             end
         end
     end
@@ -195,13 +260,50 @@ local function sync_debug_status(premature)
         return
     end
 
-    read_debug_yaml()
+    if not read_debug_yaml() then
+        return
+    end
+
     sync_debug_hooks()
 end
 
 
+local function check()
+    if not debug_yaml or not debug_yaml.http_filter then
+        return false
+    end
+
+    local http_filter = debug_yaml.http_filter
+    if not http_filter or not http_filter.enable_header_name or not http_filter.enable then
+        return false
+    end
+
+    return true
+end
+
+function _M.dynamic_debug(api_ctx)
+    if not check() then
+        return
+    end
+
+    if get_headers()[debug_yaml.http_filter.enable_header_name] then
+        api_ctx.enable_dynamic_debug = true
+    end
+end
+
+
+function _M.enable_debug()
+    if not debug_yaml or not debug_yaml.basic then
+        return false
+    end
+
+    return debug_yaml.basic.enable
+end
+
+
 function _M.init_worker()
-    if process.type() ~= "worker" and process.type() ~= "single" then
+    local process = require("ngx.process")
+    if process.type() ~= "worker" then
         return
     end
 

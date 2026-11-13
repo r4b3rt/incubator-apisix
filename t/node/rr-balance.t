@@ -55,8 +55,6 @@ __DATA__
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -97,8 +95,6 @@ passed
 GET /t
 --- response_body
 [{"count":6,"port":"1981"},{"count":6,"port":"1980"}]
---- no_error_log
-[error]
 
 
 
@@ -132,8 +128,6 @@ GET /t
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -144,7 +138,10 @@ passed
             local http = require "resty.http"
             local uri = "http://127.0.0.1:" .. ngx.var.server_port
                         .. "/server_port"
-
+            --- to trigger the healthchecker
+            local httpc = http.new()
+            local res, err = httpc:request_uri(uri, {method = "GET"})
+            ngx.sleep(3)
             local ports_count = {}
             for i = 1, 12 do
                 local httpc = http.new()
@@ -174,8 +171,6 @@ passed
 GET /t
 --- response_body
 [{"count":4,"port":"1982"},{"count":4,"port":"1981"},{"count":4,"port":"1980"}]
---- no_error_log
-[error]
 
 
 
@@ -209,8 +204,6 @@ GET /t
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -221,7 +214,10 @@ passed
             local http = require "resty.http"
             local uri = "http://127.0.0.1:" .. ngx.var.server_port
                         .. "/server_port"
-
+            --- to trigger the healthchecker
+            local httpc = http.new()
+            local res, err = httpc:request_uri(uri, {method = "GET"})
+            ngx.sleep(3)
             local ports_count = {}
             for i = 1, 12 do
                 local httpc = http.new()
@@ -251,8 +247,6 @@ passed
 GET /t
 --- response_body
 [{"count":2,"port":"1982"},{"count":4,"port":"1981"},{"count":6,"port":"1980"}]
---- no_error_log
-[error]
 
 
 
@@ -286,8 +280,6 @@ GET /t
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -298,7 +290,10 @@ passed
             local http = require "resty.http"
             local uri = "http://127.0.0.1:" .. ngx.var.server_port
                         .. "/server_port"
-
+            --- to trigger the healthchecker
+            local httpc = http.new()
+            local res, err = httpc:request_uri(uri, {method = "GET"})
+            ngx.sleep(3)
             local ports_count = {}
             for i = 1, 12 do
                 local httpc = http.new()
@@ -328,5 +323,3 @@ passed
 GET /t
 --- response_body
 [{"count":3,"port":"1982"},{"count":9,"port":"1980"}]
---- no_error_log
-[error]

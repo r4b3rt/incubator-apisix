@@ -67,7 +67,7 @@ local methods = {
 
 function _M.test_ipv6(uri)
     local sock = ngx.socket.tcp()
-    local ok, err = sock:connect("[::1]", 12345)
+    local ok, err = sock:connect("[::1]", 1984)
     if not ok then
         ngx.say("failed to connect: ", err)
         return
@@ -91,7 +91,11 @@ function _M.test_ipv6(uri)
     while true do
         local line, err, part = sock:receive()
         if line then
-            ngx.say("received: ", line)
+            if line ~= "" then
+                ngx.say("received: ", line)
+            else
+                ngx.say("received:")
+            end
 
         else
             ngx.say("failed to receive a line: ", err, " [", part, "]")
@@ -131,18 +135,27 @@ function _M.comp_tab(left_tab, right_tab)
 end
 
 
-function _M.set_config_yaml(data)
-    local fn
+local function set_yaml(fn, data)
     local profile = os.getenv("APISIX_PROFILE")
     if profile then
-        fn = "config-" .. profile .. ".yaml"
+        fn = fn .. "-" .. profile .. ".yaml"
     else
-        fn = "config.yaml"
+        fn = fn .. ".yaml"
     end
 
     local f = assert(io.open(os.getenv("TEST_NGINX_HTML_DIR") .. "/../conf/" .. fn, 'w'))
     assert(f:write(data))
     f:close()
+end
+
+
+function _M.set_config_yaml(data)
+    set_yaml("config", data)
+end
+
+
+function _M.set_apisix_yaml(data)
+    set_yaml("apisix", data)
 end
 
 
@@ -155,6 +168,7 @@ function _M.test(uri, method, body, pattern, headers)
     end
 
     if type(body) == "table" then
+        -- {} will be encoded as '[]' whether decode_array_with_array_mt or not
         body = json.encode(body)
     end
 
@@ -184,11 +198,11 @@ function _M.test(uri, method, body, pattern, headers)
     end
 
     if res.status >= 300 then
-        return res.status, res.body
+        return res.status, res.body, res.headers
     end
 
     if pattern == nil then
-        return res.status, "passed", res.body
+        return res.status, "passed", res.body, res.headers
     end
 
     local res_data = json.decode(res.body)
@@ -197,7 +211,7 @@ function _M.test(uri, method, body, pattern, headers)
         return 500, "failed, " .. err, res_data
     end
 
-    return 200, "passed", res_data
+    return 200, "passed", res_data, res.headers
 end
 
 
@@ -244,7 +258,7 @@ function _M.aes_encrypt(origin)
     if aes_128_cbc_with_iv ~= nil and str_find(origin, "---") then
         local encrypted = aes_128_cbc_with_iv:encrypt(origin)
         if encrypted == nil then
-            core.log.error("failed to encrypt key[", origin, "] ")
+            core.log.error("failed to encrypt key")
             return origin
         end
 

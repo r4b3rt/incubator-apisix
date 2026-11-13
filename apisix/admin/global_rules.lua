@@ -15,40 +15,38 @@
 -- limitations under the License.
 --
 local core = require("apisix.core")
-local utils = require("apisix.admin.utils")
+local resource = require("apisix.admin.resource")
 local schema_plugin = require("apisix.admin.plugins").check_schema
-local type = type
+local plugins_encrypt_conf = require("apisix.admin.plugins").encrypt_conf
+
+local pairs    = pairs
+local ipairs   = ipairs
 local tostring = tostring
 
+local function is_local_config_provider()
+    return core.config.type ~= "etcd"
+end
 
-local _M = {
-    version = 0.1,
-}
 
-
-local function check_conf(id, conf, need_id)
-    if not conf then
-        return nil, {error_msg = "missing configurations"}
+local function get_global_rules()
+    if is_local_config_provider() then
+        local obj = core.config.fetch_created_obj("/global_rules")
+        if not obj then
+            return nil
+        end
+        return obj.values
     end
 
-    id = id or conf.id
-    if need_id and not id then
-        return nil, {error_msg = "missing route id"}
+    local g = core.etcd.get("/global_rules", true)
+    if not g then
+        return nil
     end
+    return core.table.try_read_attr(g, "body", "list")
+end
 
-    if not need_id and id then
-        return nil, {error_msg = "wrong route id, do not need it"}
-    end
 
-    if need_id and conf.id and tostring(conf.id) ~= tostring(id) then
-        return nil, {error_msg = "wrong route id"}
-    end
-
-    conf.id = id
-
-    core.log.info("schema: ", core.json.delay_encode(core.schema.global_rule))
-    core.log.info("conf  : ", core.json.delay_encode(conf))
-    local ok, err = core.schema.check(core.schema.global_rule, conf)
+local function check_conf(id, conf, need_id, schema)
+    local ok, err = core.schema.check(schema, conf)
     if not ok then
         return nil, {error_msg = "invalid configuration: " .. err}
     end
@@ -58,119 +56,46 @@ local function check_conf(id, conf, need_id)
         return nil, {error_msg = err}
     end
 
+    -- Check for plugin conflicts with existing global rules
+    if conf.plugins then
+        local global_rules = get_global_rules()
+        if global_rules then
+            for _, existing_rule in ipairs(global_rules) do
+                -- Skip checking against itself when updating
+                if existing_rule.value and existing_rule.value.id and
+                   tostring(existing_rule.value.id) ~= tostring(id) then
+
+                    if existing_rule.value.plugins then
+                        -- Check for any overlapping plugins
+                        for plugin_name, _ in pairs(conf.plugins) do
+                            if existing_rule.value.plugins[plugin_name] then
+                                return nil, {
+                                    error_msg = "plugin '" .. plugin_name ..
+                                    "' already exists in global rule with id '" ..
+                                    existing_rule.value.id .. "'"
+                                }
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
     return true
 end
 
 
-function _M.put(id, conf)
-    local ok, err = check_conf(id, conf, true)
-    if not ok then
-        return 400, err
-    end
-
-    local key = "/global_rules/" .. id
-
-    local ok, err = utils.inject_conf_with_prev_conf("route", key, conf)
-    if not ok then
-        return 500, {error_msg = err}
-    end
-
-    local res, err = core.etcd.set(key, conf)
-    if not res then
-        core.log.error("failed to put global rule[", key, "]: ", err)
-        return 500, {error_msg = err}
-    end
-
-    return res.status, res.body
+local function encrypt_conf(id, conf)
+    plugins_encrypt_conf(conf.plugins)
 end
 
 
-function _M.get(id)
-    local key = "/global_rules"
-    if id then
-        key = key .. "/" .. id
-    end
-    local res, err = core.etcd.get(key, not id)
-    if not res then
-        core.log.error("failed to get global rule[", key, "]: ", err)
-        return 500, {error_msg = err}
-    end
-
-    return res.status, res.body
-end
-
-
-function _M.delete(id)
-    local key = "/global_rules/" .. id
-    -- core.log.info("key: ", key)
-    local res, err = core.etcd.delete(key)
-    if not res then
-        core.log.error("failed to delete global rule[", key, "]: ", err)
-        return 500, {error_msg = err}
-    end
-
-    return res.status, res.body
-end
-
-
-function _M.patch(id, conf, sub_path)
-    if not id then
-        return 400, {error_msg = "missing global rule id"}
-    end
-
-    if not conf then
-        return 400, {error_msg = "missing new configuration"}
-    end
-
-    if not sub_path or sub_path == "" then
-        if type(conf) ~= "table"  then
-            return 400, {error_msg = "invalid configuration"}
-        end
-    end
-
-    local key = "/global_rules/" .. id
-    local res_old, err = core.etcd.get(key)
-    if not res_old then
-        core.log.error("failed to get global rule [", key, "]: ", err)
-        return 500, {error_msg = err}
-    end
-
-    if res_old.status ~= 200 then
-        return res_old.status, res_old.body
-    end
-    core.log.info("key: ", key, " old value: ",
-                  core.json.delay_encode(res_old, true))
-
-    local node_value = res_old.body.node.value
-    local modified_index = res_old.body.node.modifiedIndex
-
-    if sub_path and sub_path ~= "" then
-        local code, err, node_val = core.table.patch(node_value, sub_path, conf)
-        node_value = node_val
-        if code then
-            return code, err
-        end
-    else
-        node_value = core.table.merge(node_value, conf);
-    end
-
-    core.log.info("new conf: ", core.json.delay_encode(node_value, true))
-
-    utils.inject_timestamp(node_value, nil, conf)
-
-    local ok, err = check_conf(id, node_value, true)
-    if not ok then
-        return 400, err
-    end
-
-    local res, err = core.etcd.atomic_set(key, node_value, nil, modified_index)
-    if not res then
-        core.log.error("failed to set new global rule[", key, "]: ", err)
-        return 500, {error_msg = err}
-    end
-
-    return res.status, res.body
-end
-
-
-return _M
+return resource.new({
+    name = "global_rules",
+    kind = "global rule",
+    schema = core.schema.global_rule,
+    checker = check_conf,
+    encrypt_conf = encrypt_conf,
+    unsupported_methods = {"post"}
+})

@@ -56,8 +56,6 @@ __DATA__
 GET /t
 --- response_body
 done
---- no_error_log
-[error]
 
 
 
@@ -79,9 +77,7 @@ done
 --- request
 GET /t
 --- response_body
-property "status_code" validation failed: expected 599 to be smaller than 598
---- no_error_log
-[error]
+property "status_code" validation failed: expected 599 to be at most 598
 
 
 
@@ -108,8 +104,6 @@ property "status_code" validation failed: expected 599 to be smaller than 598
 GET /t
 --- response_body
 property "body" validation failed: wrong type: expected string, got number
---- no_error_log
-[error]
 
 
 
@@ -151,8 +145,6 @@ property "body" validation failed: wrong type: expected string, got number
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -194,8 +186,6 @@ passed
 GET /t
 --- response_body
 new body
---- no_error_log
-[error]
 
 
 
@@ -232,8 +222,6 @@ new body
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -256,8 +244,6 @@ Content-Length:
 Content-Encoding:
 Last-Modified:
 ETag:
---- no_error_log
-[error]
 
 
 
@@ -297,8 +283,6 @@ ETag:
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -309,8 +293,6 @@ GET /hello
 302
 --- response_headers
 Location: https://www.iresty.com
---- no_error_log
-[error]
 
 
 
@@ -336,8 +318,6 @@ Location: https://www.iresty.com
 GET /t
 --- response_body
 invalid field length in header
---- no_error_log
-[error]
 
 
 
@@ -363,8 +343,6 @@ invalid field length in header
 GET /t
 --- response_body
 invalid type as header value
---- no_error_log
-[error]
 
 
 
@@ -402,8 +380,6 @@ invalid type as header value
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
@@ -412,8 +388,6 @@ passed
 GET /hello
 --- response_body
 Hello
---- no_error_log
-[error]
 
 
 
@@ -436,8 +410,6 @@ Hello
 GET /t
 --- response_body
 invalid base64 content
---- no_error_log
-[error]
 
 
 
@@ -471,29 +443,25 @@ invalid base64 content
             end
 
             local resp_data = core.json.decode(body)
-            ngx.say(encode_with_keys_sorted(resp_data.node.value.plugins))
+            ngx.say(encode_with_keys_sorted(resp_data.value.plugins))
         }
     }
 --- request
 GET /t
 --- response_body
-{"response-rewrite":{"body":"new body\n","body_base64":false,"headers":{"Content-Type":"","X-Server-id":3,"X-Server-status":"on"}}}
---- no_error_log
-[error]
+{"response-rewrite":{"body":"new body\n","headers":{"Content-Type":"","X-Server-id":3,"X-Server-status":"on"}}}
 
 
 
-=== TEST 16:  additional property
+=== TEST 16: add validate vars
 --- config
     location /t {
         content_by_lua_block {
             local plugin = require("apisix.plugins.response-rewrite")
             local ok, err = plugin.check_schema({
-                body = 'Hello world',
-                headers = {
-                    ["X-Server-id"] = 3
-                },
-                invalid_att = "invalid",
+                vars = {
+                    {"status","==",200}
+                }
             })
 
             if not ok then
@@ -506,6 +474,310 @@ GET /t
 --- request
 GET /t
 --- response_body
-additional properties forbidden, found invalid_att
---- no_error_log
-[error]
+done
+
+
+
+=== TEST 17: add plugin with invalidate vars
+--- config
+    location /t {
+        content_by_lua_block {
+            local plugin = require("apisix.plugins.response-rewrite")
+            local ok, err = plugin.check_schema({
+                vars = {
+                    {}
+                }
+            })
+
+            if not ok then
+                ngx.say(err)
+            else
+                ngx.say("done")
+            end
+        }
+    }
+--- request
+GET /t
+--- response_body
+failed to validate the 'vars' expression: rule too short
+
+
+
+=== TEST 18: set route with http status code as expr
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                    "plugins": {
+                        "response-rewrite": {
+                            "body": "new body3\n",
+                            "status_code": 403,
+                            "vars": [
+                                ["status","==",500]
+                            ]
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uris": ["/server_error","/hello"]
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 19: check http code that matches http_status
+--- request
+GET /server_error
+--- response_body
+new body3
+--- error_code eval
+403
+--- error_log
+500 Internal Server Error
+
+
+
+=== TEST 20: check http code that not matches http_status
+--- request
+GET /hello
+--- response_body
+hello world
+--- error_code eval
+200
+
+
+
+=== TEST 21: set an empty body with setting body_base64 to true
+--- config
+    location /t {
+        content_by_lua_block {
+            local plugin = require("apisix.plugins.response-rewrite")
+            local ok, err = plugin.check_schema({
+                            body = "",
+                            body_base64 = true
+            })
+            if not ok then
+                ngx.say(err)
+                return
+            end
+        }
+    }
+--- request
+GET /t
+--- response_body
+invalid base64 content
+
+
+
+=== TEST 22: set an nil body with setting body_base64 to true
+--- config
+    location /t {
+        content_by_lua_block {
+            local plugin = require("apisix.plugins.response-rewrite")
+            local ok, err = plugin.check_schema({
+                            body_base64 = true
+            })
+            if not ok then
+                ngx.say(err)
+                return
+            end
+        }
+    }
+--- request
+GET /t
+--- response_body
+invalid base64 content
+
+
+
+=== TEST 23: rewrite header with variables
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                    "plugins": {
+                        "response-rewrite": {
+                            "headers" : {
+                                "X-A": "$remote_addr",
+                                "X-B": "from $remote_addr to $balancer_ip:$balancer_port"
+                            }
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uri": "/with_header"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 24: hit
+--- request
+GET /with_header
+--- response_headers
+X-A: 127.0.0.1
+X-B: from 127.0.0.1 to 127.0.0.1:1980
+
+
+
+=== TEST 25: set empty body
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                    "plugins": {
+                        "response-rewrite": {
+                            "body": ""
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uri": "/hello"
+                }]]
+                )
+
+            if code >= 300 then
+                ngx.status = code
+            end
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 26: hit set empty body
+--- request
+GET /hello
+--- response_body
+
+
+
+=== TEST 27: test add header with one word
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                    "plugins": {
+                        "response-rewrite": {
+                            "headers": {
+                                "add": [
+                                    "X-Server-test:a"
+                                ]
+                            }
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uris": ["/hello"]
+                }]]
+                )
+
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 28: filters with a small max_resp_body_size
+--- config
+    location /t {
+        content_by_lua_block {
+            local t = require("lib.test_admin").test
+            local code, body = t('/apisix/admin/routes/1',
+                 ngx.HTTP_PUT,
+                 [[{
+                    "plugins": {
+                        "response-rewrite": {
+                            "max_resp_body_size": 5,
+                            "filters": [
+                                {
+                                    "regex": "hello",
+                                    "scope": "once",
+                                    "replace": "HELLO"
+                                }
+                            ]
+                        }
+                    },
+                    "upstream": {
+                        "nodes": {
+                            "127.0.0.1:1980": 1
+                        },
+                        "type": "roundrobin"
+                    },
+                    "uris": ["/hello"]
+                }]]
+                )
+
+            ngx.say(body)
+        }
+    }
+--- request
+GET /t
+--- response_body
+passed
+
+
+
+=== TEST 29: response body is truncated to max_resp_body_size before filtering
+--- request
+GET /hello
+--- response_body chomp
+HELLO

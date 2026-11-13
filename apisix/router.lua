@@ -16,55 +16,44 @@
 --
 local require = require
 local http_route = require("apisix.http.route")
+local apisix_upstream = require("apisix.upstream")
 local core    = require("apisix.core")
-local plugin_checker = require("apisix.plugin").plugin_checker
-local error   = error
-local pairs   = pairs
+local set_plugins_meta_parent = require("apisix.plugin").set_plugins_meta_parent
+local str_lower = string.lower
 local ipairs  = ipairs
-
 
 local _M = {version = 0.3}
 
 
 local function filter(route)
+    route.orig_modifiedIndex = route.modifiedIndex
+
     route.has_domain = false
     if not route.value then
         return
     end
 
-    if not route.value.upstream or not route.value.upstream.nodes then
-        return
+    set_plugins_meta_parent(route.value.plugins, route)
+
+    if route.value.host then
+        route.value.host = str_lower(route.value.host)
+    elseif route.value.hosts then
+        for i, v in ipairs(route.value.hosts) do
+            route.value.hosts[i] = str_lower(v)
+        end
     end
 
-    local nodes = route.value.upstream.nodes
-    if core.table.isarray(nodes) then
-        for _, node in ipairs(nodes) do
-            local host = node.host
-            if not core.utils.parse_ipv4(host) and
-                    not core.utils.parse_ipv6(host) then
-                route.has_domain = true
-                break
-            end
+    -- the same filter runs for stream routes, whose SNIs are matched against
+    -- apisix/ssl.lua's server_name(), which always returns them lowercased
+    if route.value.sni then
+        route.value.sni = str_lower(route.value.sni)
+    elseif route.value.snis then
+        for i, v in ipairs(route.value.snis) do
+            route.value.snis[i] = str_lower(v)
         end
-    else
-        local new_nodes = core.table.new(core.table.nkeys(nodes), 0)
-        for addr, weight in pairs(nodes) do
-            local host, port = core.utils.parse_addr(addr)
-            if not core.utils.parse_ipv4(host) and
-                    not core.utils.parse_ipv6(host) then
-                route.has_domain = true
-            end
-            local node = {
-                host = host,
-                port = port,
-                weight = weight,
-            }
-            core.table.insert(new_nodes, node)
-        end
-        route.value.upstream.nodes = new_nodes
     end
 
-    core.log.info("filter route: ", core.json.delay_encode(route))
+    apisix_upstream.filter_upstream(route.value.upstream, route)
 end
 
 
@@ -108,25 +97,28 @@ function _M.http_init_worker()
     router_ssl.init_worker()
     _M.router_ssl = router_ssl
 
-    _M.api = require("apisix.api_router")
-
-    local global_rules, err = core.config.new("/global_rules", {
-            automatic = true,
-            item_schema = core.schema.global_rule,
-            checker = plugin_checker,
-        })
-    if not global_rules then
-        error("failed to create etcd instance for fetching /global_rules : "
-              .. err)
+    -- Initialize stream router in HTTP workers only if stream mode is enabled
+    -- This allows the Control API (which runs in HTTP workers) to access stream routes
+    if conf and conf.apisix and conf.apisix.stream_proxy then
+        local router_stream = require("apisix.stream.router.ip_port")
+        router_stream.stream_init_worker(filter)
+        _M.router_stream = router_stream
     end
-    _M.global_rules = global_rules
+
+    _M.api = require("apisix.api_router")
 end
 
 
 function _M.stream_init_worker()
+    local router_ssl_name = "radixtree_sni"
+
     local router_stream = require("apisix.stream.router.ip_port")
     router_stream.stream_init_worker(filter)
     _M.router_stream = router_stream
+
+    local router_ssl = require("apisix.ssl.router." .. router_ssl_name)
+    router_ssl.init_worker()
+    _M.router_ssl = router_ssl
 end
 
 
@@ -135,6 +127,9 @@ function _M.ssls()
 end
 
 function _M.http_routes()
+    if not _M.router_http then
+        return nil, nil
+    end
     return _M.router_http.routes()
 end
 

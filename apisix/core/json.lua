@@ -14,19 +14,72 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 --
-local json_encode = require("cjson.safe").encode
+
+--- Wrapped serialization and deserialization modules for json and lua tables.
+--
+-- @module core.json
+
+local cjson = require("cjson.safe")
+local json_encode = cjson.encode
+local json_decode = cjson.decode
+local cjson_null = cjson.null
 local clear_tab = require("table.clear")
+local require = require
 local ngx = ngx
 local tostring = tostring
 local type = type
 local pairs = pairs
+local ipairs = ipairs
+local getmetatable = getmetatable
 local cached_tab = {}
+
+local rapidjson
+local rapidjson_null
+local rapidjson_encode_opts = { sort_keys = true }
 
 
 local _M = {
     version = 0.1,
-    decode = require("cjson.safe").decode,
+    array_mt = cjson.array_mt,
+    null = cjson_null,
+    -- This method produces the same encoded string when the input is not changed.
+    -- Different calls with cjson.encode will produce different string because
+    -- it doesn't maintain the object key order.
+    stably_encode = require("dkjson").encode
 }
+
+
+local function strip_nulls(t)
+    for k, v in pairs(t) do
+        if v == cjson_null then
+            t[k] = nil
+        elseif type(v) == "table" then
+            strip_nulls(v)
+        end
+    end
+    return t
+end
+_M.strip_nulls = strip_nulls
+
+
+--- Decode a JSON string.
+-- @tparam string str The JSON string to decode.
+-- @tparam[opt] table opts Options table.
+--   null_as_nil: if true, recursively replace cjson.null with nil.
+-- @return The decoded Lua value, or nil on error.
+-- @return Error string on failure.
+function _M.decode(str, opts)
+    local obj, err = json_decode(str)
+    if obj and opts and opts.null_as_nil then
+        if obj == cjson_null then
+            return nil, err
+        end
+        if type(obj) == "table" then
+            strip_nulls(obj)
+        end
+    end
+    return obj, err
+end
 
 
 local function serialise_obj(data)
@@ -75,25 +128,85 @@ end
 _M.encode = encode
 
 
-local delay_tab = setmetatable({data = "", force = false}, {
-    __tostring = function(self)
-        local res, err = encode(self.data, self.force)
-        if not res then
-            ngx.log(ngx.WARN, "failed to encode: ", err,
-                    " force: ", self.force)
-        end
-
-        return res
+local function to_rapidjson_value(data)
+    if data == cjson_null then
+        return rapidjson_null
     end
-})
+
+    if type(data) ~= "table" then
+        return data
+    end
+
+    if getmetatable(data) == cjson.array_mt then
+        local arr = {}
+        for i, v in ipairs(data) do
+            arr[i] = to_rapidjson_value(v)
+        end
+        return rapidjson.array(arr)
+    end
+
+    local obj = {}
+    for k, v in pairs(data) do
+        obj[k] = to_rapidjson_value(v)
+    end
+    return obj
+end
 
 
--- this is a non-thread safe implementation
--- it works well with log, eg: log.info(..., json.delay_encode({...}))
+--- Encode a Lua value to a canonical JSON string with sorted object keys.
+-- Unlike core.json.encode, object keys are emitted in a stable (sorted) order,
+-- so the same logical value always produces the same string -- suitable for
+-- hashing, cache keys and signatures. cjson null / array_mt markers are
+-- preserved. Backed by rapidjson, which is loaded on first use.
+-- @tparam table data The value to encode.
+-- @treturn string The canonically-encoded JSON string.
+function _M.canonical_encode(data)
+    if not rapidjson then
+        rapidjson = require("rapidjson")
+        rapidjson_null = rapidjson.null
+    end
+    return rapidjson.encode(to_rapidjson_value(data), rapidjson_encode_opts)
+end
+
+local max_delay_encode_items = 16
+local delay_tab_idx = 0
+local delay_tab_arr = {}
+for i = 1, max_delay_encode_items do
+    delay_tab_arr[i] = setmetatable({data = "", force = false}, {
+        __tostring = function(self)
+            local res, err = encode(self.data, self.force)
+            if not res then
+                ngx.log(ngx.WARN, "failed to encode: ", err,
+                        " force: ", self.force)
+            end
+
+            return res
+        end
+    })
+end
+
+
+
+---
+-- Delayed encoding of input data, avoid unnecessary encode operations.
+-- When really writing logs, if the given parameter is table, it will be converted to string in
+-- OpenResty by checking if there is a metamethod registered for `__tostring`, and if so,
+-- calling this method to convert it to string.
+--
+-- @function core.json.delay_encode
+-- @tparam string|table data The data to be encoded.
+-- @tparam boolean force encode data can't be encoded as JSON with tostring
+-- @treturn table The table with the __tostring function overridden.
+-- @usage
+-- core.log.info("conf  : ", core.json.delay_encode(conf))
 function _M.delay_encode(data, force)
-    delay_tab.data = data
-    delay_tab.force = force
-    return delay_tab
+    delay_tab_idx = delay_tab_idx+1
+    if delay_tab_idx > max_delay_encode_items then
+        delay_tab_idx = 1
+    end
+    delay_tab_arr[delay_tab_idx].data = data
+    delay_tab_arr[delay_tab_idx].force = force
+    return delay_tab_arr[delay_tab_idx]
 end
 
 

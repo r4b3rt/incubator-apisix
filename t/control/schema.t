@@ -50,7 +50,9 @@ __DATA__
                 [[{
                     "main": {
                         "consumer": {"type":"object"},
+                        "consumer_group": {"type":"object"},
                         "global_rule": {"type":"object"},
+                        "plugin_config": {"type":"object"},
                         "plugins": {"type":"array"},
                         "proto": {"type":"object"},
                         "route": {"type":"object"},
@@ -60,28 +62,88 @@ __DATA__
                         "upstream": {"type":"object"},
                         "upstream_hash_header_schema": {"type":"string"},
                         "upstream_hash_vars_schema": {"type":"string"},
-                    },
+                    },]] .. [[
                     "plugins": {
                         "example-plugin": {
                             "version": 0.1,
                             "priority": 0,
-                            "schema": {"type":"object"},
+                            "schema": {
+                                "type":"object",
+                                "properties": {
+                                    "_meta": {
+                                         "properties": {
+                                             "disable": {"type": "boolean"}
+                                         }
+                                    }
+                                }
+                            },
                             "metadata_schema": {"type":"object"}
-                        },
-                        "mqtt-proxy": {
-                            "schema": {"type":"object"},
-                            "priority": 1000
                         },
                         "basic-auth": {
                             "type": "auth",
                             "consumer_schema": {"type":"object"}
                         }
+                    },
+                    "stream_plugins": {
+                        "mqtt-proxy": {
+                            "schema": {
+                                "type":"object",
+                                "properties": {
+                                    "_meta": {
+                                         "properties": {
+                                             "disable": {"type": "boolean"}
+                                         }
+                                    }
+                                }
+                            },
+                            "priority": 1000
+                        }
                     }
                 }]]
                 )
-            ngx.satus = code
+            ngx.status = code
             ngx.say(body)
         }
     }
 --- response_body
 passed
+
+
+
+=== TEST 2: confirm the scope of plugin
+--- extra_yaml_config
+plugins:
+  - batch-requests
+  - error-log-logger
+  - server-info
+  - example-plugin
+  - node-status
+--- config
+    location /t {
+        content_by_lua_block {
+            local json = require("toolkit.json")
+            local t = require("lib.test_admin").test
+
+            local code, message, res = t('/v1/schema',
+                ngx.HTTP_GET
+            )
+
+            if code >= 300 then
+                ngx.status = code
+                ngx.say(message)
+                return
+            end
+
+            res = json.decode(res)
+            local global_plugins = {}
+            local plugins = res["plugins"]
+            for k, v in pairs(plugins) do
+                if v.scope == "global" then
+                    global_plugins[k] = v.scope
+                end
+            end
+            ngx.say(json.encode(global_plugins))
+        }
+    }
+--- response_body
+{"batch-requests":"global","error-log-logger":"global","node-status":"global","server-info":"global"}

@@ -116,8 +116,6 @@ qr{invalid item data of \[/apisix/routes/1\], val: mexxxxxxxxxxxxxxx, it should 
 GET /t
 --- response_body
 done
---- no_error_log
-[error]
 
 
 
@@ -150,14 +148,13 @@ done
 GET /t
 --- response_body
 passed
---- no_error_log
-[error]
 
 
 
 === TEST 6: hit route
 --- request
 GET /server_port
---- error_code: 500
+--- error_code: 503
 --- error_log
 failed to parse domain: xxxx.invalid
+--- timeout: 10

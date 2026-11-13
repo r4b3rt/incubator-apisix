@@ -16,16 +16,14 @@
 --
 local core     = require("apisix.core")
 local log_util = require("apisix.utils.log-util")
-local batch_processor = require("apisix.utils.batch-processor")
+local bp_manager_mod = require("apisix.utils.batch-processor-manager")
 local plugin_name = "tcp-logger"
 local tostring = tostring
-local buffers = {}
 local ngx = ngx
 local tcp = ngx.socket.tcp
-local ipairs   = ipairs
-local stale_timer_running = false
-local timer_at = ngx.timer.at
 
+
+local batch_processor_manager = bp_manager_mod.new("tcp logger", plugin_name)
 local schema = {
     type = "object",
     properties = {
@@ -34,28 +32,60 @@ local schema = {
         tls = {type = "boolean", default = false},
         tls_options = {type = "string"},
         timeout = {type = "integer", minimum = 1, default= 1000},
-        name = {type = "string", default = "tcp logger"},
-        max_retry_count = {type = "integer", minimum = 0, default = 0},
-        retry_delay = {type = "integer", minimum = 0, default = 1},
-        buffer_duration = {type = "integer", minimum = 1, default = 60},
-        inactive_timeout = {type = "integer", minimum = 1, default = 5},
-        batch_max_size = {type = "integer", minimum = 1, default = 1000},
-        include_req_body = {type = "boolean", default = false}
+        log_format = {type = "object"},
+        log_format_extra = {type = "object"},
+        include_req_body = {type = "boolean", default = false},
+        include_req_body_expr = {
+            type = "array",
+            minItems = 1,
+            items = {
+                type = "array"
+            }
+        },
+        include_resp_body = { type = "boolean", default = false },
+        include_resp_body_expr = {
+            type = "array",
+            minItems = 1,
+            items = {
+                type = "array"
+            }
+        },
+        max_req_body_bytes = {type = "integer", minimum = 1, default = 524288},
+        max_resp_body_bytes = {type = "integer", minimum = 1, default = 524288},
     },
     required = {"host", "port"}
 }
 
+local metadata_schema = {
+    type = "object",
+    properties = {
+        log_format_extra = {
+            type = "object"
+        },
+        log_format = {
+            type = "object"
+        },
+    },
+}
 
 local _M = {
     version = 0.1,
     priority = 405,
     name = plugin_name,
-    schema = schema,
+    metadata_schema = batch_processor_manager:wrap_metadata_schema(metadata_schema),
+    schema = batch_processor_manager:wrap_schema(schema),
 }
 
-function _M.check_schema(conf)
+
+function _M.check_schema(conf, schema_type)
+    if schema_type == core.schema.TYPE_METADATA then
+        return core.schema.check(metadata_schema, conf)
+    end
+
+    core.utils.check_tls_bool({"tls"}, conf, plugin_name)
     return core.schema.check(schema, conf)
 end
+
 
 local function send_tcp_data(conf, log_message)
     local err_msg
@@ -63,7 +93,7 @@ local function send_tcp_data(conf, log_message)
     local sock, soc_err = tcp()
 
     if not sock then
-        return false, "failed to init the socket" .. soc_err
+        return false, "failed to init the socket: " .. soc_err
     end
 
     sock:settimeout(conf.timeout)
@@ -79,7 +109,7 @@ local function send_tcp_data(conf, log_message)
     if conf.tls then
         ok, err = sock:sslhandshake(true, conf.tls_options, false)
         if not ok then
-            return false, "failed to to perform TLS handshake to TCP server: host["
+            return false, "failed to perform TLS handshake to TCP server: host["
                           .. conf.host .. "] port[" .. tostring(conf.port) .. "] err: " .. err
         end
     end
@@ -100,36 +130,19 @@ local function send_tcp_data(conf, log_message)
     return res, err_msg
 end
 
--- remove stale objects from the memory after timer expires
-local function remove_stale_objects(premature)
-    if premature then
-        return
-    end
 
-    for key, batch in ipairs(buffers) do
-        if #batch.entry_buffer.entries == 0 and #batch.batch_to_process == 0 then
-            core.log.warn("removing batch processor stale object, conf: ",
-                          core.json.delay_encode(key))
-            buffers[key] = nil
-        end
-    end
+_M.access = log_util.check_and_read_req_body
 
-    stale_timer_running = false
+
+function _M.body_filter(conf, ctx)
+    log_util.collect_body(conf, ctx)
 end
 
 
 function _M.log(conf, ctx)
-    local entry = log_util.get_full_log(ngx, conf)
+    local entry = log_util.get_log_entry(plugin_name, conf, ctx)
 
-    if not stale_timer_running then
-        -- run the timer every 30 mins if any log is present
-        timer_at(1800, remove_stale_objects)
-        stale_timer_running = true
-    end
-
-    local log_buffer = buffers[conf]
-    if log_buffer then
-        log_buffer:push(entry)
+    if batch_processor_manager:add_entry(conf, entry) then
         return
     end
 
@@ -143,33 +156,14 @@ function _M.log(conf, ctx)
         end
 
         if not data then
-            core.log.error('error occurred while encoding the data: ', err)
+            return false, 'error occurred while encoding the data: ' .. err
         end
 
         return send_tcp_data(conf, data)
     end
 
-    local config = {
-        name = conf.name,
-        retry_delay = conf.retry_delay,
-        batch_max_size = conf.batch_max_size,
-        max_retry_count = conf.max_retry_count,
-        buffer_duration = conf.buffer_duration,
-        inactive_timeout = conf.inactive_timeout,
-        route_id = ctx.var.route_id,
-        server_addr = ctx.var.server_addr,
-    }
-
-    local err
-    log_buffer, err = batch_processor:new(func, config)
-
-    if not log_buffer then
-        core.log.error("error when creating the batch processor: ", err)
-        return
-    end
-
-    buffers[conf] = log_buffer
-    log_buffer:push(entry)
+    batch_processor_manager:add_entry_to_new_processor(conf, entry, ctx, func)
 end
+
 
 return _M
